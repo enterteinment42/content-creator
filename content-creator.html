@@ -1009,7 +1009,7 @@ function redrawPreview(targetCanvas){
     if(cell.circle||cell.plate) return;
     ctx.save();rr(ctx,cell.x,cell.y,cell.w,cell.h,8);ctx.clip();
     if(c.imgEl){initT(i);_drawCellImg(ctx,cell,c.imgEl,c.transform);}else{ctx.fillStyle='#1a1a30';ctx.fillRect(cell.x,cell.y,cell.w,cell.h);ctx.fillStyle='#3a3a60';ctx.font=`${Math.min(cell.w,cell.h)*.2}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('🎮',cell.x+cell.w/2,cell.y+cell.h/2);}
-    if(_collageMode==='cards')_drawCardOverlay(ctx,cell,c);
+    if(_collageMode==='cards'){const fig=(lay==='circ4'||lay==='square5');_drawCardOverlay(ctx,cell,c,(fig&&cell.y+cell.h/2<H/2)?'top':'bottom');}
     ctx.restore();ctx.save();rr(ctx,cell.x,cell.y,cell.w,cell.h,8);ctx.strokeStyle=_frameColor+'20';ctx.lineWidth=1;ctx.stroke();ctx.restore();
   });
   if(lay==='circ4'||lay==='square5'){const oi=_previewCells.findIndex(c=>c.circle||c.plate);if(oi>=0&&oi<collageCovers.length){const cell=_previewCells[oi];const cv=collageCovers[oi];initT(oi);if(cell.circle&&cv.imgEl){_drawCircleImg(ctx,cell.cx,cell.cy,cell.r,cv.imgEl,cv.transform);}else if(cell.plate&&cv.imgEl){_drawPlateImg(ctx,cell.cx,cell.cy,cell.side,cv.imgEl,cv.transform,8);}}}
@@ -1043,6 +1043,38 @@ function _redrawCirc4d(ctx,W,H){
   pts.forEach(([ex,ey],i)=>{const a=THETA+i*Math.PI/2;const rx=cx+r*Math.cos(a),ry=cy+r*Math.sin(a);ctx.beginPath();ctx.moveTo(rx,ry);ctx.lineTo(ex,ey);ctx.stroke();});
   ctx.restore();
   const cv0=collageCovers[0];if(cv0?.imgEl){initT(0);_drawCircleImg(ctx,cx,cy,r,cv0.imgEl,cv0.transform);}
+  // CC-4: в режиме «Карточки» цены не помещаются в треугольные секторы — рисуем чипы в углах экрана
+  // (каждый угол = сектор своей игры), центральную игру — чипом на нижней кромке круга.
+  if(_collageMode==='cards'){
+    const fs=Math.max(16,Math.round(W*0.03)),pad=Math.max(12,Math.round(Math.min(W,H)*0.03));
+    const cornerPts=[[W,H],[0,H],[0,0],[W,0]];
+    _pinwheelPolys.forEach((poly,si)=>{
+      const cv=collageCovers[si+1];if(!cv||!cv.priceRUB)return;
+      const corner=cornerPts.find(cp=>poly.some(p=>Math.abs(p[0]-cp[0])<2&&Math.abs(p[1]-cp[1])<2));
+      if(!corner)return;
+      const{chipW,chipH}=_chipSize(ctx,cv,fs);
+      const bx=corner[0]<2?pad:W-pad-chipW,by=corner[1]<2?pad:H-pad-chipH;
+      _drawFigPriceChip(ctx,bx,by,chipW,chipH,fs,cv);
+    });
+    if(cv0&&cv0.priceRUB){const{chipW,chipH}=_chipSize(ctx,cv0,fs);_drawFigPriceChip(ctx,cx-chipW/2,cy+r-chipH/2,chipW,chipH,fs,cv0);}
+  }
+}
+function _chipSize(ctx,cv,fs){
+  const priceStr=cv.priceRUB?cv.priceRUB.toLocaleString('ru')+' ₽':'';
+  const discStr=cv.discount?`-${cv.discount}%`:'';const dfs=Math.max(11,Math.round(fs*0.72));
+  ctx.font=`700 ${fs}px Arial,sans-serif`;const tw=ctx.measureText(priceStr).width;
+  let dw=0;if(discStr){ctx.font=`700 ${dfs}px Arial,sans-serif`;dw=ctx.measureText(discStr).width+Math.round(fs*0.4);}
+  return{chipW:Math.round(tw+dw+fs),chipH:Math.round(fs*1.7)};
+}
+function _drawFigPriceChip(ctx,bx,by,chipW,chipH,fs,cv){
+  const priceStr=cv.priceRUB?cv.priceRUB.toLocaleString('ru')+' ₽':'';if(!priceStr)return;
+  const discStr=cv.discount?`-${cv.discount}%`:'';const dfs=Math.max(11,Math.round(fs*0.72));
+  ctx.save();ctx.shadowColor='rgba(0,0,0,0.5)';ctx.shadowBlur=Math.round(fs*0.6);
+  ctx.fillStyle='rgba(10,10,22,0.92)';rr(ctx,bx,by,chipW,chipH,Math.round(chipH*0.3));ctx.fill();ctx.restore();
+  ctx.textAlign='left';ctx.textBaseline='middle';
+  ctx.font=`700 ${fs}px Arial,sans-serif`;const tw=ctx.measureText(priceStr).width;
+  ctx.fillStyle='#f0c040';ctx.fillText(priceStr,bx+Math.round(fs*0.5),by+chipH/2);
+  if(discStr){ctx.font=`700 ${dfs}px Arial,sans-serif`;ctx.fillStyle='#ff6a4d';ctx.fillText(discStr,bx+Math.round(fs*0.5)+tw+Math.round(fs*0.4),by+chipH/2);}
 }
 function _wrapLines(ctx,text,maxW,maxLines){
   maxLines=maxLines||2;
@@ -1063,11 +1095,16 @@ function _wrapLines(ctx,text,maxW,maxLines){
   }
   return lines;
 }
-function _drawCardOverlay(ctx,cell,c){
+function _drawCardOverlay(ctx,cell,c,edge){
+  edge=edge||'bottom'; // CC-4: 'top' — плашка у верхнего края (верхние ячейки фигурных макетов)
   const cardStyle=document.getElementById('coll-card-style')?.value||'dark';
-  const ph=Math.round(cell.h*0.32);const py=cell.y+cell.h-ph;
-  if(cardStyle==='dark'){ctx.fillStyle='rgba(10,10,22,0.92)';ctx.fillRect(cell.x,py,cell.w,ph);ctx.fillStyle='rgba(0,112,209,0.8)';ctx.fillRect(cell.x,py,cell.w,3);}
-  else if(cardStyle==='gradient'){const grad=ctx.createLinearGradient(0,py-Math.round(ph*0.5),0,cell.y+cell.h);grad.addColorStop(0,'rgba(10,10,22,0)');grad.addColorStop(0.4,'rgba(10,10,22,0.85)');grad.addColorStop(1,'rgba(10,10,22,0.97)');ctx.fillStyle=grad;ctx.fillRect(cell.x,py-Math.round(ph*0.5),cell.w,ph+Math.round(ph*0.5));}
+  const ph=Math.round(cell.h*0.32);const py=edge==='top'?cell.y:cell.y+cell.h-ph;
+  const ext=Math.round(ph*0.5);
+  if(cardStyle==='dark'){ctx.fillStyle='rgba(10,10,22,0.92)';ctx.fillRect(cell.x,py,cell.w,ph);ctx.fillStyle='rgba(0,112,209,0.8)';ctx.fillRect(cell.x,edge==='top'?py+ph-3:py,cell.w,3);}
+  else if(cardStyle==='gradient'){
+    if(edge==='top'){const grad=ctx.createLinearGradient(0,cell.y,0,py+ph+ext);grad.addColorStop(0,'rgba(10,10,22,0.97)');grad.addColorStop(0.6,'rgba(10,10,22,0.85)');grad.addColorStop(1,'rgba(10,10,22,0)');ctx.fillStyle=grad;ctx.fillRect(cell.x,cell.y,cell.w,ph+ext);}
+    else{const grad=ctx.createLinearGradient(0,py-ext,0,cell.y+cell.h);grad.addColorStop(0,'rgba(10,10,22,0)');grad.addColorStop(0.4,'rgba(10,10,22,0.85)');grad.addColorStop(1,'rgba(10,10,22,0.97)');ctx.fillStyle=grad;ctx.fillRect(cell.x,py-ext,cell.w,ph+ext);}
+  }
   else{ctx.fillStyle='rgba(8,8,15,0.85)';ctx.fillRect(cell.x,py,cell.w,ph);}
   const hideTitle=document.getElementById('coll-card-hide-title')?.checked;
   const pfs=Math.max(14,Math.round(cell.w*0.1));const priceStr=c.priceRUB?c.priceRUB.toLocaleString('ru')+' ₽':'';
