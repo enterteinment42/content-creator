@@ -828,7 +828,9 @@ function _displayTitle(s){
     .replace(/\s*\((?:PlayStation|PS[45]|Xbox)[^)]*\)/gi, '')
     .replace(/\s*\([A-Z]{2,5}\d{3,}\)/g, '')
     .replace(/\s+Version\s*$/i, '')
+    .replace(/[,\s]+(PS[45][\s,&]*)+$/i, '')
     .replace(/\s+(PlayStation\s*\d?|PS[45]|Xbox(\s+One|\s+Series\s*[SX])?|PC)\s*$/i, '')
+    .replace(/\s+:/g, ':')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -1932,12 +1934,19 @@ async function downloadStoryBatch(){
   let ok=0,fail=0;
   for(const g of list){
     const entry={id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e'};
+    // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком
+    const iconUrl=entry.imgUrl;
+    const hd=await _hdCoverUrl(entry.title);
+    const primary=hd||iconUrl;
     await new Promise(resolve=>{
-      if(!entry.imgUrl){resolve();return;}
-      const img=new Image();img.crossOrigin='anonymous';
-      img.onload=()=>{entry.imgEl=img;resolve();};
-      img.onerror=()=>{fail++;resolve();};
-      img.src=entry.imgUrl;
+      if(!primary){resolve();return;}
+      const tryLoad=(url,fallback)=>{
+        const img=new Image();img.crossOrigin='anonymous';
+        img.onload=()=>{entry.imgEl=img;entry.imgUrl=url;resolve();};
+        img.onerror=()=>{if(fallback&&fallback!==url){tryLoad(fallback,null);}else{fail++;resolve();}};
+        img.src=url;
+      };
+      tryLoad(primary,iconUrl);
     });
     _stG=[entry];_stGameCount=1;
     _stRenderTemplate();
