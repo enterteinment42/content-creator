@@ -437,6 +437,7 @@
       <div id="out-panel" class="opanel" style="display:none;margin-top:10px">
         <div class="ot">ГОТОВО — СКОПИРУЙ:</div>
         <pre id="out-text"></pre>
+        <div id="out-count" style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right"></div>
         <div class="bf2" style="margin-top:8px">
           <button class="bf grn" onclick="copyOut()">📋 Копировать</button>
           <button class="bf sec" onclick="regenPost()">🔄 Заново</button>
@@ -645,6 +646,12 @@ function pickEmoji(g){
 
 // ── TG Post Generator ──────────────────────────────────────
 const descModel = localStorage.getItem('descModel') || 'claude-sonnet-4-6';
+const TG_TEXT_LIMIT = 4096; // лимит Telegram sendMessage
+// Версия поста для отправки в канал (parse_mode:'Markdown'): названия/описания с экранированными
+// спецсимволами. На экране и в буфере — чистый текст без бэкслешей (для ручной вставки).
+let _tgPostMd = '';
+// Экранирование для legacy Markdown Телеграма: только _ * [ ` ломают парсинг
+function _escMd(s){ return String(s).replace(/([_*\[`])/g, '\\$1'); }
 
 async function generateAIPost() {
   const sel = games.filter(g => g._sel && g.priceRUB);
@@ -656,6 +663,7 @@ async function generateAIPost() {
   const missing = sel.filter(g => !g.description);
   btn.disabled = true;
   btn.textContent = missing.length ? '⏳ Генерирую...' : '📝 Собираю пост...';
+  if (typeof _tgDisarmSend === 'function') _tgDisarmSend(); // CC-14: пересборка сбрасывает взведённую отправку
   document.getElementById('out-panel').style.display = 'none';
 
   const customHeader = (document.getElementById('tg-header')?.value || '').trim() || '🔥Лучшие #скидки и предложения PS';
@@ -703,12 +711,17 @@ async function generateAIPost() {
     bar.style.width = '95%';
     status.textContent = 'Собираю пост...';
 
-    const lines = sel.map(g => {
+    const lines = [], linesMd = [];
+    sel.forEach(g => {
       const desc = g.description || genDescs[g.title] || '';
       const dt = _displayTitle(g.title);
-      return `${pickEmoji({title:dt,description:desc})} ${dt} — ${g.priceRUB.toLocaleString('ru')} руб.\n${desc}`;
+      const em = pickEmoji({title:dt,description:desc});
+      const price = g.priceRUB.toLocaleString('ru');
+      lines.push(`${em} ${dt} — ${price} руб.\n${desc}`);
+      linesMd.push(`${em} ${_escMd(dt)} — ${price} руб.\n${_escMd(desc)}`);
     });
     const postText = `${customHeader}\n\n${lines.join('\n\n')}\n\n${customFooter}`;
+    _tgPostMd = `${customHeader}\n\n${linesMd.join('\n\n')}\n\n${customFooter}`;
 
     const lost = sel.filter(g => !g.description && !genDescs[g.title]);
 
@@ -716,6 +729,7 @@ async function generateAIPost() {
     bar.style.width = '100%';
     status.textContent = `✅ Готово! Из архива: ${sel.length - missing.length}, новых: ${missing.length - lost.length}` + (lost.length ? `, без описания: ${lost.length}` : '');
     document.getElementById('out-text').textContent = postText;
+    _updateOutCount(postText.length);
     document.getElementById('out-panel').style.display = '';
     showToast(lost.length ? `⚠️ Пост готов, но ${lost.length} игр без описания` : `✅ Пост готов (${sel.length} игр)`);
     setTimeout(() => prog.style.display = 'none', 2500);
@@ -752,21 +766,47 @@ function _claudeHeaders(){
   return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
 }
 
+// CC-13: счётчик символов под готовым постом; >4096 — красный и отправка блокируется
+function _updateOutCount(len){
+  const cnt = document.getElementById('out-count');
+  if (!cnt) return;
+  const over = len > TG_TEXT_LIMIT;
+  cnt.textContent = `${len.toLocaleString('ru')} / ${TG_TEXT_LIMIT.toLocaleString('ru')} символов` + (over ? ' — слишком длинно, Telegram не примет' : '');
+  cnt.style.color = over ? '#e74c3c' : 'var(--muted)';
+  cnt.style.fontWeight = over ? '700' : '';
+}
+// CC-14: публикация необратима — первый клик «взводит» кнопку, второй (в течение 6 с) отправляет
+let _tgSendArmed = false, _tgArmTimer = null;
+function _tgDisarmSend(){
+  _tgSendArmed = false;
+  clearTimeout(_tgArmTimer);
+  const btn = document.getElementById('send-tg-btn');
+  if (btn) { btn.textContent = '📤 Отправить в канал'; btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = ''; }
+}
 async function sendPostToTG(){
   const text = document.getElementById('out-text').textContent;
   if (!text) { showToast('Сначала собери пост'); return; }
+  if (text.length > TG_TEXT_LIMIT) { _tgDisarmSend(); showToast(`❌ Пост ${text.length.toLocaleString('ru')} символов — лимит Telegram ${TG_TEXT_LIMIT.toLocaleString('ru')}. Сократи.`); return; }
+  const btn = document.getElementById('send-tg-btn');
+  if (!_tgSendArmed) {
+    _tgSendArmed = true;
+    if (btn) { btn.textContent = '❗ Точно отправить? Клик = публикация'; btn.style.background = 'rgba(192,57,43,.85)'; btn.style.borderColor = '#c0392b'; btn.style.color = '#fff'; }
+    clearTimeout(_tgArmTimer);
+    _tgArmTimer = setTimeout(_tgDisarmSend, 6000);
+    return;
+  }
+  _tgDisarmSend();
   let token = localStorage.getItem('cc_admin_token') || '';
   if (!token) {
     token = (prompt('Админ-токен для отправки в канал:') || '').trim();
     if (!token) return;
     localStorage.setItem('cc_admin_token', token);
   }
-  const btn = document.getElementById('send-tg-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Отправляю...'; }
   try {
     const resp = await fetch(API + '/api/tg-post', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text: _tgPostMd || text })
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
