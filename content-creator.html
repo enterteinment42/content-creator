@@ -266,6 +266,7 @@
       <button class="bf grn" onclick="downloadCollage()" id="dl-btn" style="flex:2;display:none">⬇️ Скачать PNG</button>
       <button class="bf sec" onclick="downloadCollageFormat('square')" id="dl-square-btn" style="flex:1;display:none" title="1080×1080 — квадрат для VK/Instagram">◻️ 1080×1080</button>
       <button class="bf sec" onclick="downloadCollageFormat('preview')" id="dl-preview-btn" style="flex:1;display:none" title="1200×630 — превью-ссылка (Open Graph)">🔗 1200×630</button>
+      <button class="bf sec" onclick="collageToPost()" id="dl-topost-btn" style="flex:1;display:none" title="Прикрепить этот коллаж к TG-посту — уйдут одним сообщением">📎 В пост</button>
     </div>
   </div>
 </div>
@@ -463,8 +464,13 @@
         <div class="ot">ГОТОВО — СКОПИРУЙ:</div>
         <pre id="out-text"></pre>
         <div id="out-count" style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right"></div>
+        <div id="out-img" style="display:none;align-items:center;gap:8px;margin-top:8px;padding:6px;border:1px solid var(--border);border-radius:6px">
+          <img id="out-img-thumb" style="width:40px;height:40px;object-fit:cover;border-radius:4px;flex-shrink:0">
+          <div id="out-img-label" style="flex:1;min-width:0;font-size:10px;color:var(--muted);line-height:1.4"></div>
+          <button class="bf sec" onclick="clearPostImg()" style="flex:0 0 auto;padding:3px 8px;font-size:10px" title="Отправить пост без картинки">✕ Убрать</button>
+        </div>
         <div class="bf2" style="margin-top:8px">
-          <button class="bf grn" onclick="copyOut()">📋 Копировать</button>
+          <button class="bf grn" onclick="copyOut()" title="Копируется markdown-версия: названия игр — ссылки на карточки, Telegram сделает их кликабельными при отправке">📋 Копировать</button>
           <button class="bf sec" onclick="regenPost()">🔄 Заново</button>
           <button class="bf sec" id="send-tg-btn" onclick="sendPostToTG()" title="Отправить в канал @play_best_games">📤 Отправить в канал</button>
         </div>
@@ -671,7 +677,25 @@ function pickEmoji(g){
 
 // ── TG Post Generator ──────────────────────────────────────
 const descModel = localStorage.getItem('descModel') || 'claude-sonnet-4-6';
-const TG_TEXT_LIMIT = 4096; // лимит Telegram sendMessage
+const TG_TEXT_LIMIT = 4096;    // лимит Telegram sendMessage (пост без картинки)
+const TG_CAPTION_LIMIT = 1024; // лимит подписи sendPhoto (пост с картинкой) — это ограничение Telegram, не наше
+// Картинка, прикреплённая к посту кнопкой «📎 В пост» в коллаже (data URL, JPEG). Пока она стоит —
+// текст уходит подписью к фото одним сообщением, и действует лимит 1024.
+let _ccPostImg='', _ccPostImgLabel='';
+function _tgLimit(){ return _ccPostImg ? TG_CAPTION_LIMIT : TG_TEXT_LIMIT; }
+function clearPostImg(){ _ccPostImg=''; _ccPostImgLabel=''; _renderPostImgBox(); }
+function _renderPostImgBox(){
+  const box=document.getElementById('out-img');
+  if(box){
+    box.style.display=_ccPostImg?'flex':'none';
+    if(_ccPostImg){
+      document.getElementById('out-img-thumb').src=_ccPostImg;
+      document.getElementById('out-img-label').textContent=_ccPostImgLabel+' — уйдёт одним постом, текст станет подписью';
+    }
+  }
+  _tgDisarmSend(); // состав поста изменился — взведённую отправку сбрасываем
+  _updateOutCount();
+}
 // Версия поста для отправки в канал (parse_mode:'Markdown'): названия/описания с экранированными
 // спецсимволами. На экране и в буфере — чистый текст без бэкслешей (для ручной вставки).
 let _tgPostMd = '';
@@ -742,8 +766,9 @@ async function generateAIPost() {
       const dt = _displayTitle(g.title);
       const em = pickEmoji({title:dt,description:desc});
       const price = g.priceRUB.toLocaleString('ru');
+      const mdTitle=g.id!=null?`[${_escMd(dt)}](https://poigraem.shop/?game=${g.id})`:_escMd(dt);
       lines.push(`${em} ${dt} — ${price} руб.\n${desc}`);
-      linesMd.push(`${em} ${_escMd(dt)} — ${price} руб.\n${_escMd(desc)}`);
+      linesMd.push(`${em} ${mdTitle} — ${price} руб.\n${_escMd(desc)}`);
     });
     const postText = `${customHeader}\n\n${lines.join('\n\n')}\n\n${customFooter}`;
     _tgPostMd = `${customHeader}\n\n${linesMd.join('\n\n')}\n\n${customFooter}`;
@@ -754,7 +779,7 @@ async function generateAIPost() {
     bar.style.width = '100%';
     status.textContent = `✅ Готово! Из архива: ${sel.length - missing.length}, новых: ${missing.length - lost.length}` + (lost.length ? `, без описания: ${lost.length}` : '');
     document.getElementById('out-text').textContent = postText;
-    _updateOutCount(postText.length);
+    _updateOutCount();
     document.getElementById('out-panel').style.display = '';
     showToast(lost.length ? `⚠️ Пост готов, но ${lost.length} игр без описания` : `✅ Пост готов (${sel.length} игр)`);
     setTimeout(() => prog.style.display = 'none', 2500);
@@ -768,13 +793,16 @@ async function generateAIPost() {
   }
 }
 function regenPost() { document.getElementById('out-panel').style.display = 'none'; generateAIPost(); }
+// Копируем markdown-версию, а не то, что показано на экране: в ней названия обёрнуты в ссылки
+// на карточки игр (CC-12) — Telegram превращает их в кликабельные при отправке, ровно как уже
+// происходит со ссылками в подвале поста. На экране остаётся чистый текст — он читаемее.
 function copyOut() {
-  const t = document.getElementById('out-text').textContent;
+  const t = _tgPostMd || document.getElementById('out-text').textContent;
   if (!t) { showToast('Сначала сгенерируй'); return; }
-  navigator.clipboard.writeText(t).then(() => showToast('📋 Скопировано!')).catch(() => {
+  navigator.clipboard.writeText(t).then(() => showToast('📋 Скопировано со ссылками!')).catch(() => {
     const x = document.createElement('textarea'); x.value = t;
     document.body.appendChild(x); x.select(); document.execCommand('copy'); document.body.removeChild(x);
-    showToast('📋 Скопировано!');
+    showToast('📋 Скопировано со ссылками!');
   });
 }
 // Прямая отправка готового поста в канал @play_best_games (backend/server.js: POST /api/tg-post).
@@ -791,12 +819,19 @@ function _claudeHeaders(){
   return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
 }
 
-// CC-13: счётчик символов под готовым постом; >4096 — красный и отправка блокируется
-function _updateOutCount(len){
+// CC-13: счётчик символов под готовым постом; сверх лимита — красный и отправка блокируется.
+// Считаем по markdown-версии (с CC-12-ссылками она длиннее экранной), лимит зависит от того,
+// прикреплена ли картинка: 4096 у текстового поста, 1024 у подписи к фото.
+function _updateOutCount(){
   const cnt = document.getElementById('out-count');
   if (!cnt) return;
-  const over = len > TG_TEXT_LIMIT;
-  cnt.textContent = `${len.toLocaleString('ru')} / ${TG_TEXT_LIMIT.toLocaleString('ru')} символов` + (over ? ' — слишком длинно, Telegram не примет' : '');
+  const text = document.getElementById('out-text').textContent || '';
+  if (!text) { cnt.textContent = ''; return; }
+  const len = Math.max(text.length, (_tgPostMd || '').length);
+  const lim = _tgLimit();
+  const over = len > lim;
+  cnt.textContent = `${len.toLocaleString('ru')} / ${lim.toLocaleString('ru')} символов`
+    + (over ? (_ccPostImg ? ' — с картинкой лимит подписи 1024, не влезает' : ' — слишком длинно, Telegram не примет') : '');
   cnt.style.color = over ? '#e74c3c' : 'var(--muted)';
   cnt.style.fontWeight = over ? '700' : '';
 }
@@ -811,11 +846,19 @@ function _tgDisarmSend(){
 async function sendPostToTG(){
   const text = document.getElementById('out-text').textContent;
   if (!text) { showToast('Сначала собери пост'); return; }
-  if (text.length > TG_TEXT_LIMIT) { _tgDisarmSend(); showToast(`❌ Пост ${text.length.toLocaleString('ru')} символов — лимит Telegram ${TG_TEXT_LIMIT.toLocaleString('ru')}. Сократи.`); return; }
+  const sendText = _tgPostMd || text;
+  const lim = _tgLimit();
+  if (sendText.length > lim) {
+    _tgDisarmSend();
+    showToast(_ccPostImg
+      ? `❌ ${sendText.length.toLocaleString('ru')} символов — с картинкой Telegram примет только ${lim.toLocaleString('ru')} (подпись к фото). Сократи пост или убери картинку.`
+      : `❌ Пост ${sendText.length.toLocaleString('ru')} символов — лимит Telegram ${lim.toLocaleString('ru')}. Сократи.`);
+    return;
+  }
   const btn = document.getElementById('send-tg-btn');
   if (!_tgSendArmed) {
     _tgSendArmed = true;
-    if (btn) { btn.textContent = '❗ Точно отправить? Клик = публикация'; btn.style.background = 'rgba(192,57,43,.85)'; btn.style.borderColor = '#c0392b'; btn.style.color = '#fff'; }
+    if (btn) { btn.textContent = _ccPostImg ? '❗ Точно отправить с картинкой?' : '❗ Точно отправить? Клик = публикация'; btn.style.background = 'rgba(192,57,43,.85)'; btn.style.borderColor = '#c0392b'; btn.style.color = '#fff'; }
     clearTimeout(_tgArmTimer);
     _tgArmTimer = setTimeout(_tgDisarmSend, 6000);
     return;
@@ -831,11 +874,11 @@ async function sendPostToTG(){
   try {
     const resp = await fetch(API + '/api/tg-post', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify({ text: _tgPostMd || text })
+      body: JSON.stringify(_ccPostImg ? { text: sendText, photo: _ccPostImg } : { text: sendText })
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-    showToast('✅ Пост отправлен в канал');
+    showToast(_ccPostImg ? '✅ Пост с картинкой отправлен в канал' : '✅ Пост отправлен в канал');
   } catch (e) {
     showToast('Ошибка отправки: ' + e.message);
   } finally {
@@ -885,6 +928,9 @@ function _cleanEditionTitle(s){
 // Лёгкая чистка названия для показа на постах/картинках/в ИИ-промптах: убирает ®/™/©, коды вида
 // (CUSA07378), приписки платформы [PS4 & PS5]/(PlayStation®5)/трейлинг PS4-PS5-Xbox-Version.
 // В отличие от _cleanEditionTitle НЕ обрезает Deluxe/Bundle/Collection и т.п. — это часть названия.
+// Результат идёт не только на экран: от него же пляшет IGDB-поиск HD-обложки (_hdCoverUrl), поэтому
+// висячий хвост здесь стоит дорого — «NBA 2K26 for» матчится в IGDB на «NBA 2K26: Slam Edition» с
+// confidence:'low', HD-апгрейд отбрасывается, и в коллаже остаётся мыльная обложка из снапшота.
 function _displayTitle(s){
   if(!s) return s;
   return s
@@ -895,6 +941,9 @@ function _displayTitle(s){
     .replace(/\s+Version\s*$/i, '')
     .replace(/[,\s]+(PS[45][\s,&]*)+$/i, '')
     .replace(/\s+(PlayStation\s*\d?|PS[45]|Xbox(\s+One|\s+Series\s*[SX])?|PC)\s*$/i, '')
+    // Предлог, оставшийся без своего продолжения: либо платформу срезали правила выше
+    // («… for PS5» → «… for»), либо название приехало обрезанным уже из снапшота («NBA 2K26 for»).
+    .replace(/\s+for\s*$/i, '')
     .replace(/\s+:/g, ':')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -962,6 +1011,7 @@ function openCollage(){
   document.getElementById('dl-btn').style.display='none';
   document.getElementById('dl-square-btn').style.display='none';
   document.getElementById('dl-preview-btn').style.display='none';
+  document.getElementById('dl-topost-btn').style.display='none';
   _updateSlotBar();
   const fcEl=document.getElementById('cc-frame-color');if(fcEl)fcEl.value=_frameColor;
   const bcEl=document.getElementById('cc-bg-color');if(bcEl)bcEl.value=_bgColor;
@@ -995,10 +1045,9 @@ function _updateSlotBar(){
 function _slotZoom(i,d){zoomSlot(i,d);_updateSlotBar();}
 function _slotReset(i){initT(i);collageCovers[i].transform={ox:0,oy:0,scale:1};drawSlot(i);redrawPreview();_updateSlotBar();}
 function _selectSlot(i){_selSlot=i;collageCovers.forEach((_,j)=>{const c=document.getElementById(`sc-${j}`);if(c)c.style.borderColor=j===i?'var(--accent)':(collageCovers[j].imgEl?'var(--blue)':'var(--border)');});_updateSlotBar();}
-function resetCanvas(){const canvas=document.getElementById('coll-canvas');const hint=document.getElementById('coll-hint');const dl=document.getElementById('dl-btn');const dls=document.getElementById('dl-square-btn');const dlp=document.getElementById('dl-preview-btn');if(canvas)canvas.style.display='none';if(hint)hint.style.display='';if(dl)dl.style.display='none';if(dls)dls.style.display='none';if(dlp)dlp.style.display='none';_previewCells=[];}
+function resetCanvas(){const canvas=document.getElementById('coll-canvas');const hint=document.getElementById('coll-hint');const dl=document.getElementById('dl-btn');const dls=document.getElementById('dl-square-btn');const dlp=document.getElementById('dl-preview-btn');const dlt=document.getElementById('dl-topost-btn');if(canvas)canvas.style.display='none';if(hint)hint.style.display='';if(dl)dl.style.display='none';if(dls)dls.style.display='none';if(dlp)dlp.style.display='none';if(dlt)dlt.style.display='none';_previewCells=[];}
 function initT(i){if(!collageCovers[i]) return;if(!collageCovers[i].transform)collageCovers[i].transform={ox:0,oy:0,scale:1};}
 function closeCollage(){const m=document.getElementById('coll-modal');if(m)m.classList.remove('open');collageCovers=[];_previewCells=[];_prevDrag={active:false,idx:-1,lx:0,ly:0};_selSlot=-1;}
-function collagePickImg(i){const inp=document.createElement('input');inp.type='file';inp.accept='image/*';inp.style.position='fixed';inp.style.left='-9999px';inp.style.top='0';document.body.appendChild(inp);inp.onchange=e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>{collageCovers[i].img=ev.target.result;collageCovers[i].transform={ox:0,oy:0,scale:1};loadImgEl(i,ev.target.result,()=>{renderCollageSlots();previewCollage();});};r.readAsDataURL(f);}setTimeout(()=>{try{document.body.removeChild(inp);}catch(_){}},100);};setTimeout(()=>inp.click(),0);}
 function setCollageMode(mode){_collageMode=mode;document.getElementById('coll-mode-covers').style.background=mode==='covers'?'var(--blue)':'transparent';document.getElementById('coll-mode-covers').style.color=mode==='covers'?'#fff':'var(--muted)';document.getElementById('coll-mode-cards').style.background=mode==='cards'?'var(--blue)':'transparent';document.getElementById('coll-mode-cards').style.color=mode==='cards'?'#fff':'var(--muted)';const opts=document.getElementById('coll-card-opts');if(opts)opts.style.display=mode==='cards'?'flex':'none';previewCollage();}
 document.addEventListener('mousemove',e=>{if(!_prevDrag.active) return;const i=_prevDrag.idx;initT(i);collageCovers[i].transform.ox+=e.clientX-_prevDrag.lx;collageCovers[i].transform.oy+=e.clientY-_prevDrag.ly;_prevDrag.lx=e.clientX;_prevDrag.ly=e.clientY;drawSlot(i);redrawPreview();});
 document.addEventListener('mouseup',e=>{if(!_prevDrag.active) return;const i=_prevDrag.idx;const canvas=document.getElementById(`sc-${i}`);if(canvas)canvas.style.cursor='grab';if(_slotDragStart&&collageCovers[i]?.imgEl){const dist=Math.hypot(e.clientX-_slotDragStart.x,e.clientY-_slotDragStart.y);if(dist<5)_selectSlot(i);}_slotDragStart=null;_prevDrag.active=false;});
@@ -1188,15 +1237,39 @@ function previewCollage(){
   document.getElementById('dl-btn').style.display='';
   document.getElementById('dl-square-btn').style.display='';
   document.getElementById('dl-preview-btn').style.display='';
+  document.getElementById('dl-topost-btn').style.display='';
   attachPreview();
 }
 function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
-function downloadCollage(){
-  showToast('Подготовка...');const gapEl=document.getElementById('coll-gap');if(gapEl)_collageGap=+gapEl.value;
+// Собирает коллаж в родном разрешении (та же композиция, что уходит в «Скачать PNG»): перегружает
+// обложки без кеша, рисует на offscreen-канвас, возвращает превью на место и отдаёт canvas в cb.
+function _renderCollageFull(cb){
+  const gapEl=document.getElementById('coll-gap');if(gapEl)_collageGap=+gapEl.value;
   document.fonts.ready.then(()=>{
   const lay=getLayout();const{cells,W,H}=getCells(lay,collageCovers.length,2);const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
   const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
-  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(off);_collageLayout=prevLayout;_previewCells=prevCells;try{const a=document.createElement('a');a.download='collage.png';a.href=off.toDataURL('image/png');a.click();if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');}catch(e){showToast('Ошибка: '+e.message);}collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();});
+  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(off);_collageLayout=prevLayout;_previewCells=prevCells;collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();cb(off,_failed);});
+  });
+}
+function downloadCollage(){
+  showToast('Подготовка...');
+  _renderCollageFull((off,failed)=>{
+    try{const a=document.createElement('a');a.download='collage.png';a.href=off.toDataURL('image/png');a.click();if(failed)showToast('⚠️ '+failed+' обл. не загрузилось — в файле заглушки');}catch(e){showToast('Ошибка: '+e.message);}
+  });
+}
+// «📎 В пост»: тот же коллаж кладётся в _ccPostImg и уходит вместе с текстом одним сообщением
+// (sendPhoto). JPEG, а не PNG — base64 едет в JSON-теле запроса (лимит express 10mb), у PNG
+// коллажа он в разы тяжелее без выигрыша в качестве на фотографиях.
+function collageToPost(){
+  if(!collageCovers.filter(c=>c.imgEl).length){showToast('Сначала собери коллаж');return;}
+  showToast('Подготовка картинки...');
+  _renderCollageFull((off,failed)=>{
+    try{
+      _ccPostImg=off.toDataURL('image/jpeg',.92);
+      _ccPostImgLabel=`Коллаж ${off.width}×${off.height}`;
+      _renderPostImgBox();
+      showToast('📎 Коллаж прикреплён к посту'+(failed?` (⚠️ ${failed} обл. не загрузилось)`:''));
+    }catch(e){showToast('Ошибка: '+e.message);}
   });
 }
 // Мультиформат: та же композиция коллажа, вписанная (contain, по центру) в фиксированный кадр
@@ -1770,19 +1843,22 @@ function closeStory(){document.getElementById('story-modal').classList.remove('o
 // Фоновый HD-апгрейд одного слота (один IGDB-запрос на игру, guard от повтора). Замыкаемся на объект g, а не на индекс — переживает reorder.
 function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
 
-// ── IMAGE PICKER (story cover swap) ───────────────────────────
+// ── IMAGE PICKER (story cover swap + коллаж) ───────────────────────────
 let _pickerSlot=-1;
+let _pickerTarget='story'; // 'story' | 'collage' — куда применить выбранную обложку
 // Б-3: URL обложек хранятся в массивах по вкладкам, клик идёт по индексу — URL больше не попадает в onclick-атрибут (апостроф в URL не ломает строку).
 let _pickerUrls={store:[],igdb:[],ps:[]};
 function _pickerPick(tab,i){const u=(_pickerUrls[tab]||[])[i];if(u==null)return;_pickerApply(u);}
-function _stPickImg(i){
+function _openPicker(target,i,title){
+  _pickerTarget=target;
   _pickerSlot=i;
-  const g=_stG[i];
-  document.getElementById('cc-picker-title').textContent='Обложка: '+g.title.slice(0,28);
+  document.getElementById('cc-picker-title').textContent='Обложка: '+(title||'').slice(0,28);
   const el=document.getElementById('cc-img-picker');
   el.style.display='flex';
   _pickerTab('store');
 }
+function _stPickImg(i){_openPicker('story',i,_stG[i]?.title);}
+function collagePickImg(i){_openPicker('collage',i,collageCovers[i]?.title);}
 function _closePicker(){document.getElementById('cc-img-picker').style.display='none';}
 function _pickerTab(tab){
   ['store','file','igdb','ps'].forEach(t=>{
@@ -1796,7 +1872,16 @@ function _pickerTab(tab){
   if(tab==='ps'){const ti=document.getElementById('cc-ps-token');if(ti)ti.value=localStorage.getItem('cc_admin_token')||'';}
 }
 function _pickerApply(url){
-  if(_pickerSlot<0||!_stG[_pickerSlot]) return;
+  if(_pickerSlot<0) return;
+  if(_pickerTarget==='collage'){
+    if(!collageCovers[_pickerSlot]) return;
+    collageCovers[_pickerSlot].img=url;
+    collageCovers[_pickerSlot].transform={ox:0,oy:0,scale:1};
+    loadImgEl(_pickerSlot,url,()=>{renderCollageSlots();previewCollage();});
+    _closePicker();
+    return;
+  }
+  if(!_stG[_pickerSlot]) return;
   _stG[_pickerSlot].imgUrl=url;
   const img=new Image();img.crossOrigin='anonymous';
   img.onload=()=>{_stG[_pickerSlot].imgEl=img;_stBuildGameList();_stRedrawCurrent();};
