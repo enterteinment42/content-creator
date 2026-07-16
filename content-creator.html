@@ -878,7 +878,16 @@ async function sendPostToTG(){
     });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-    showToast(_ccPostImg ? '✅ Пост с картинкой отправлен в канал' : '✅ Пост отправлен в канал');
+    // Бэкенд после TG публикует пост в VK напрямую (вебхук на собственные сообщения бота не
+    // приходит) и возвращает результат в data.vk — TG-успех не отменяется ошибкой VK.
+    let msg = _ccPostImg ? '✅ Пост с картинкой отправлен в канал' : '✅ Пост отправлен в канал';
+    const vk = data.vk;
+    if (vk) {
+      if (vk.ok && vk.post_id) msg += vk.noPhoto ? ' · ВК: опубликован, но БЕЗ картинки' : ' · ВК: опубликован';
+      else if (vk.ok && vk.skipped) msg += ' · ВК: пропущен (' + vk.skipped + ')';
+      else msg += ' · ⚠️ ВК не опубликован: ' + (vk.error || 'ошибка');
+    }
+    showToast(msg);
   } catch (e) {
     showToast('Ошибка отправки: ' + e.message);
   } finally {
