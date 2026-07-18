@@ -151,6 +151,9 @@
 <div id="app-header">
   <h1>🎮 Content Creator</h1>
   <span id="snapshot-date"></span>
+  <select id="brand-sel" onchange="brandApply(this.value)" title="Пресет бренда: шапка/подвал поста, лого, цвета, шаблон сторис" style="max-width:160px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:5px 6px;cursor:pointer"></select>
+  <button class="btn" onclick="brandSaveCurrent()" title="Сохранить ТЕКУЩИЕ настройки (шапка/подвал, лого, цвета, шаблон) как именованный пресет">💾</button>
+  <button class="btn" onclick="brandDelete()" title="Удалить выбранный пресет">🗑</button>
   <button class="btn" onclick="loadSnapshot()" id="btn-refresh">🔄 Обновить</button>
 </div>
 
@@ -596,6 +599,71 @@ function removeCustomItem(cid) {
   _saveCustomItems(_loadCustomItems().filter(c => c._cid !== cid));
   games = games.filter(g => g._cid !== cid);
   filterGames(); updateButtons();
+}
+
+// ── Пресеты бренда ─────────────────────────────────────────
+// Именованный снимок всех «брендовых» localStorage-ключей: шапка/подвал поста, лого (URL/позиция/
+// форма), цвета коллажа, фоны, шаблон сторис. Разные каналы (PS-игры / консоли / …) — разные пресеты.
+const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on'];
+function _brandList() { try { return JSON.parse(localStorage.getItem('cc_brand_presets') || '{}'); } catch(_) { return {}; } }
+function _brandRenderSel() {
+  const sel = document.getElementById('brand-sel'); if (!sel) return;
+  const cur = localStorage.getItem('cc_brand_current') || '';
+  sel.innerHTML = '<option value="">— бренд —</option>' + Object.keys(_brandList()).map(n => `<option${n === cur ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+function brandSaveCurrent() {
+  const name = (prompt('Имя пресета бренда (сохранит текущие шапку/подвал, лого, цвета, шаблон):', localStorage.getItem('cc_brand_current') || '') || '').trim();
+  if (!name) return;
+  const snap = {};
+  BRAND_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) snap[k] = v; });
+  const all = _brandList(); all[name] = snap;
+  localStorage.setItem('cc_brand_presets', JSON.stringify(all));
+  localStorage.setItem('cc_brand_current', name);
+  _brandRenderSel();
+  showToast(`💾 Бренд «${name}» сохранён`);
+}
+function brandApply(name) {
+  if (!name) { localStorage.removeItem('cc_brand_current'); return; }
+  const snap = _brandList()[name]; if (!snap) { showToast('Пресет не найден'); return; }
+  BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else localStorage.removeItem(k); });
+  localStorage.setItem('cc_brand_current', name);
+  _brandApplyLive();
+  showToast(`✅ Бренд «${name}» применён`);
+}
+// Подхват применённого пресета «вживую»: перечитываем переменные из localStorage и перерисовываем
+// открытые модалки — без перезагрузки страницы.
+function _brandApplyLive() {
+  _frameColor = localStorage.getItem('cc_frame_color') || '#ffffff';
+  _bgColor = localStorage.getItem('cc_bg_color') || '#0a0a16';
+  _collageBgStyle = localStorage.getItem('cc_collage_bg_style') || 'flat';
+  _logoShape = localStorage.getItem('cc_logo_shape') || 'circle';
+  _stLogoUrl = localStorage.getItem('cc_logo_url') || '';
+  _stLogoPos = localStorage.getItem('cc_logo_pos') || 'tr';
+  _stBgStyle = localStorage.getItem('cc_st_bg_style') || 'dark';
+  _stTplId = localStorage.getItem('cc_tpl_id') || 'cards';
+  _stDescOn = localStorage.getItem('cc_desc_on') !== '0';
+  _stLogoImg = null; _collageLogoImg = null;
+  if (_stLogoUrl) { const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { _stLogoImg = img; if (document.getElementById('story-modal')?.classList.contains('open')) _stRedrawCurrent(); }; img.src = _stLogoUrl; }
+  loadTgTemplate();
+  const fcEl = document.getElementById('cc-frame-color'); if (fcEl) fcEl.value = _frameColor;
+  const bcEl = document.getElementById('cc-bg-color'); if (bcEl) bcEl.value = _bgColor;
+  if (document.getElementById('coll-modal')?.classList.contains('open')) { _preloadCollageLogo(); redrawPreview(); }
+  if (document.getElementById('story-modal')?.classList.contains('open')) {
+    const luInp = document.getElementById('st-logo-url'); if (luInp) luInp.value = _stLogoUrl;
+    const lsSel = document.getElementById('st-logo-shape'); if (lsSel) lsSel.value = _logoShape;
+    const descCb = document.getElementById('st-desc-on'); if (descCb) descCb.checked = _stDescOn;
+    _stUpdateTplBtns(); _stRedrawCurrent();
+  }
+}
+function brandDelete() {
+  const sel = document.getElementById('brand-sel'); const name = sel ? sel.value : '';
+  if (!name) { showToast('Сначала выбери пресет в списке'); return; }
+  if (!confirm(`Удалить пресет «${name}»? Текущие настройки при этом не изменятся.`)) return;
+  const all = _brandList(); delete all[name];
+  localStorage.setItem('cc_brand_presets', JSON.stringify(all));
+  if (localStorage.getItem('cc_brand_current') === name) localStorage.removeItem('cc_brand_current');
+  _brandRenderSel();
+  showToast('🗑 Пресет удалён');
 }
 
 // ── Table ──────────────────────────────────────────────────
@@ -2324,6 +2392,7 @@ async function downloadStoryBatch(){
 }
 
 // ── Init ───────────────────────────────────────────────────
+_brandRenderSel();
 loadSnapshot();
 loadTgTemplate();
 </script>
