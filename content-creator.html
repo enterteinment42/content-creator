@@ -466,7 +466,10 @@
       <div id="out-panel" class="opanel" style="display:none;margin-top:10px">
         <div class="ot">ГОТОВО — СКОПИРУЙ:</div>
         <div id="out-text" class="txbox" contenteditable="true" style="white-space:pre-wrap;min-height:160px;max-height:400px;overflow-y:auto;cursor:text" oninput="_updateOutCount();_tgDisarmSend()"></div>
-        <div id="out-count" style="font-size:10px;color:var(--muted);margin-top:4px;text-align:right"></div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:4px">
+          <button id="out-shrink-btn" onclick="aiShrinkPost()" style="display:none;background:rgba(240,160,32,.12);border:1px solid rgba(240,160,32,.4);color:var(--accent);border-radius:5px;padding:3px 10px;font-size:11px;cursor:pointer" title="ИИ сократит описания, сохранив все товары, цены и ссылки">✂️ Сжать ИИ до лимита</button>
+          <div id="out-count" style="font-size:10px;color:var(--muted)"></div>
+        </div>
         <div id="out-img" style="display:none;align-items:center;gap:8px;margin-top:8px;padding:6px;border:1px solid var(--border);border-radius:6px">
           <img id="out-img-thumb" style="width:40px;height:40px;object-fit:cover;border-radius:4px;flex-shrink:0">
           <div id="out-img-label" style="flex:1;min-width:0;font-size:10px;color:var(--muted);line-height:1.4"></div>
@@ -858,6 +861,7 @@ function _mdLinksToHtml(s){
 }
 // Сериализация текущего (возможно, отредактированного вручную) содержимого #out-text.
 // mode:'md' — для отправки в TG (parse_mode:'Markdown', спецсимволы экранированы);
+// mode:'mdraw' — те же [текст](url)-ссылки, но БЕЗ экранирования — для ИИ-сжатия (модели чистый текст);
 // mode:'plain' — текстовый фолбэк буфера обмена (ссылка рядом со словом в скобках, без разметки).
 function _outSerialize(mode){
   const root = document.getElementById('out-text');
@@ -869,7 +873,7 @@ function _outSerialize(mode){
     if (node.tagName==='A'){
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
-      out += mode==='md' ? `[${_escMd(label)}](${href})` : `${label} (${href})`;
+      out += mode==='md' ? `[${_escMd(label)}](${href})` : mode==='mdraw' ? `[${label}](${href})` : `${label} (${href})`;
       return;
     }
     if (node.tagName==='BR'){ out += '\n'; return; }
@@ -1025,6 +1029,35 @@ function _updateOutCount(){
     + (over ? (_ccPostImg ? ' — с картинкой лимит подписи 1024, не влезает' : ' — слишком длинно, Telegram не примет') : '');
   cnt.style.color = over ? '#e74c3c' : 'var(--muted)';
   cnt.style.fontWeight = over ? '700' : '';
+  const sb = document.getElementById('out-shrink-btn');
+  if (sb) sb.style.display = over ? '' : 'none';
+}
+// «✂️ Сжать ИИ до лимита»: пересобирает текст поста через Claude, когда он не влезает в лимит
+// Telegram (4096 текст / 1024 подпись к фото). Все [текст](url)-ссылки, товары и цены сохраняются,
+// сокращаются только описания. Ответ модели кладётся обратно в редактор (ссылки снова живые <a>).
+async function aiShrinkPost(){
+  const btn = document.getElementById('out-shrink-btn');
+  const raw = _outSerialize('mdraw');
+  if (!raw) { showToast('Сначала собери пост'); return; }
+  const lim = _tgLimit();
+  const target = Math.floor(lim * .93); // запас: экранирование _ * [ ` при отправке добавит символов
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Сжимаю...'; }
+  try {
+    const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](url) сохрани ВСЕ до единой, URL не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
+    const resp = await fetch(API + '/api/claude', { method: 'POST', headers: _claudeHeaders(), body: JSON.stringify({ model: descModel, max_tokens: 3000, messages: [{ role: 'user', content: prompt }] }) });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const text = data.content.map(c => c.text || '').join('').trim().replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '').trim();
+    if (!text) throw new Error('пустой ответ модели');
+    document.getElementById('out-text').innerHTML = _mdLinksToHtml(text);
+    _tgDisarmSend(); _updateOutCount();
+    const nowLen = Math.max(_outSerialize('plain').length, _outSerialize('md').length);
+    showToast(nowLen <= lim ? `✂️ Сжато: ${nowLen.toLocaleString('ru')} символов — влезает` : `⚠️ Всё ещё ${nowLen.toLocaleString('ru')} — нажми ещё раз`);
+  } catch(e) {
+    showToast('Ошибка сжатия: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✂️ Сжать ИИ до лимита'; }
+  }
 }
 // CC-14: публикация необратима — первый клик «взводит» кнопку, второй (в течение 6 с) отправляет
 let _tgSendArmed = false, _tgArmTimer = null;
