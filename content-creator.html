@@ -164,6 +164,7 @@
     <input id="search" type="search" placeholder="Поиск по названию…" oninput="filterGames()" autocomplete="off">
     <label id="only-sel-label"><input type="checkbox" id="only-sel" onchange="toggleOnlySelected(this.checked)" style="accent-color:var(--blue)"> Только выбранные</label>
     <button class="btn" onclick="deselectAll()">Снять всё</button>
+    <button class="btn" onclick="openCustomItem()" title="Добавить позицию не из каталога — консоль, аксессуар, что угодно">➕ Товар</button>
     <span id="sel-count">Выбрано: 0</span>
     <div class="action-btns">
       <button class="btn" id="btn-collage" onclick="openCollage()" disabled>🖼 Коллаж</button>
@@ -481,6 +482,24 @@
   </div>
 </div>
 
+<!-- CUSTOM ITEM MODAL — свой товар (не из снапшота): консоли, аксессуары и т.п. -->
+<div id="custom-modal" class="modal-bg" onclick="if(event.target===this)closeCustomItem()">
+  <div class="modal-box" style="width:420px">
+    <div class="modal-hdr"><span>➕ Свой товар</span><button class="modal-close" onclick="closeCustomItem()">×</button></div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+      <label style="font-size:11px;color:var(--muted)">Название*<br><input id="ci-title" type="text" style="width:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px"></label>
+      <div style="display:flex;gap:10px">
+        <label style="flex:1;font-size:11px;color:var(--muted)">Цена, ₽*<br><input id="ci-price" type="number" min="1" style="width:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px"></label>
+        <label style="flex:1;font-size:11px;color:var(--muted)">Старая цена, ₽ (для скидки)<br><input id="ci-old" type="number" min="1" style="width:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:13px"></label>
+      </div>
+      <label style="font-size:11px;color:var(--muted)">Описание (для поста; пустое — допишет ИИ)<br><textarea id="ci-desc" rows="3" style="width:100%;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-size:12px;resize:vertical"></textarea></label>
+      <label style="font-size:11px;color:var(--muted)">Фото<br><input id="ci-photo" type="file" accept="image/*" onchange="_ciPickPhoto(this)" style="margin-top:4px;font-size:11px;color:var(--muted)"></label>
+      <img id="ci-preview" style="display:none;width:90px;aspect-ratio:3/4;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+      <button class="btn btn-blue" onclick="saveCustomItem()" style="padding:10px">💾 Добавить в таблицу</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -505,6 +524,7 @@ async function loadSnapshot() {
     const data = await r.json();
     const snap = typeof data.data === 'string' ? JSON.parse(data.data) : (data.data || data);
     games = (snap.games || []).filter(g => !g.hidden).map(g => ({...g, _sel: false}));
+    _mergeCustomItems(); // свои товары (консоли и т.п.) живут в localStorage и переживают обновление снапшота
     const ts = data.updated_at || data.ts;
     if (ts) document.getElementById('snapshot-date').textContent = 'Обновлено: ' + new Date(ts).toLocaleString('ru', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     filtered = [...games];
@@ -516,6 +536,66 @@ async function loadSnapshot() {
   } finally {
     document.getElementById('btn-refresh').disabled = false;
   }
+}
+
+// ── Свои товары (не из снапшота): консоли, аксессуары, любые позиции ──
+// Хранятся в localStorage (cc_custom_items), фото ужимается до 600px JPEG, id:null —
+// в постах такие позиции идут без ссылки на карточку (guard g.id!=null уже есть), QR для них недоступен.
+const CUSTOM_KEY = 'cc_custom_items';
+let _ciPhoto = '';
+function _loadCustomItems() { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || '[]'); } catch(_) { return []; } }
+function _saveCustomItems(list) { try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(list)); } catch(e) { showToast('⚠️ Не удалось сохранить товары: ' + e.message); } }
+function _mergeCustomItems() {
+  const customs = _loadCustomItems().map(c => ({...c, hidden: false, _custom: true, _sel: false}));
+  games = [...customs, ...games];
+}
+function openCustomItem() {
+  _ciPhoto = '';
+  ['ci-title','ci-price','ci-old','ci-desc'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('ci-photo').value = '';
+  document.getElementById('ci-preview').style.display = 'none';
+  document.getElementById('custom-modal').classList.add('open');
+  document.getElementById('ci-title').focus();
+}
+function closeCustomItem() { document.getElementById('custom-modal').classList.remove('open'); }
+function _shrinkImage(src, maxW, cb) {
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, maxW / (img.naturalWidth || maxW));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    try { cb(c.toDataURL('image/jpeg', .85)); } catch(_) { cb(src); }
+  };
+  img.onerror = () => cb(src);
+  img.src = src;
+}
+function _ciPickPhoto(inp) {
+  const f = inp.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => _shrinkImage(ev.target.result, 600, dataUrl => {
+    _ciPhoto = dataUrl;
+    const p = document.getElementById('ci-preview'); p.src = dataUrl; p.style.display = 'block';
+  });
+  r.readAsDataURL(f);
+}
+function saveCustomItem() {
+  const title = document.getElementById('ci-title').value.trim();
+  const price = parseInt(document.getElementById('ci-price').value, 10);
+  if (!title || !price) { showToast('Нужны минимум название и цена'); return; }
+  const old = parseInt(document.getElementById('ci-old').value, 10) || 0;
+  const discount = old > price ? Math.round((1 - price / old) * 100) : null;
+  const item = { _cid: Date.now(), id: null, title, priceRUB: price, discount, icon: _ciPhoto || '', description: document.getElementById('ci-desc').value.trim(), store: 'RUB' };
+  const list = _loadCustomItems(); list.unshift(item); _saveCustomItems(list);
+  games.unshift({...item, hidden: false, _custom: true, _sel: true});
+  filterGames(); updateButtons(); closeCustomItem();
+  showToast('✅ Товар добавлен' + (discount ? ` (скидка −${discount}%)` : ''));
+}
+function removeCustomItem(cid) {
+  if (!confirm('Удалить этот товар из таблицы?')) return;
+  _saveCustomItems(_loadCustomItems().filter(c => c._cid !== cid));
+  games = games.filter(g => g._cid !== cid);
+  filterGames(); updateButtons();
 }
 
 // ── Table ──────────────────────────────────────────────────
@@ -540,7 +620,7 @@ function renderTable() {
       </td>
       <td class="td-thumb">${thumb}</td>
       <td class="td-title">${esc(_displayTitle(g.title))}</td>
-      <td class="td-store">${esc(g.store || '')}</td>
+      <td class="td-store">${g._custom ? `<button onclick="event.stopPropagation();removeCustomItem(${g._cid})" title="Удалить свой товар" style="background:none;border:none;cursor:pointer;font-size:12px">🗑</button>` : esc(g.store || '')}</td>
       <td class="td-price">${price}</td>
       <td class="td-disc">${disc}</td>
       <td class="td-desc">${g.description ? '<span class="desc-yes" title="Есть описание">✓</span>' : '<span class="desc-no" title="Нет описания">–</span>'}</td>
@@ -1047,12 +1127,12 @@ function openCollage(){
   const sel=all.slice(0,5);
   if(all.length>5)showToast('Для коллажа берутся первые 5 игр');
   _preloadCollageLogo();
-  collageCovers=sel.map(g=>({title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount,img:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null)),imgEl:null,transform:null}));
+  collageCovers=sel.map(g=>({title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount,img:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null)),imgEl:null,transform:null,custom:!!g._custom}));
   _updateLayoutRadios(collageCovers.length);
   let loaded=0;
   collageCovers.forEach((c,i)=>{if(c.img){loadImgEl(i,c.img,()=>{loaded++;renderCollageSlots();if(loaded===collageCovers.filter(x=>x.img).length)previewCollage();});}});
   // Фоновый апгрейд до HD: подменяем на крупную обложку, если IGDB её нашёл и слот не тронут вручную
-  collageCovers.forEach((c,i)=>{const orig=c.img;_hdCoverUrl(c.title).then(hd=>{if(hd&&collageCovers[i]&&collageCovers[i].img===orig){collageCovers[i].img=hd;loadImgEl(i,hd,()=>{renderCollageSlots();previewCollage();});}});});
+  collageCovers.forEach((c,i)=>{if(c.custom)return;const orig=c.img;_hdCoverUrl(c.title).then(hd=>{if(hd&&collageCovers[i]&&collageCovers[i].img===orig){collageCovers[i].img=hd;loadImgEl(i,hd,()=>{renderCollageSlots();previewCollage();});}});});
   renderCollageSlots();resetCanvas();_selSlot=-1;
   document.getElementById('coll-mode-covers').style.background=_collageMode==='covers'?'var(--blue)':'transparent';
   document.getElementById('coll-mode-cards').style.background=_collageMode==='cards'?'var(--blue)':'transparent';
@@ -1110,6 +1190,7 @@ document.addEventListener('keydown',e=>{
       if(openModal.id==='coll-modal')closeCollage();
       else if(openModal.id==='story-modal')closeStory();
       else if(openModal.id==='tg-modal')closeTGPost();
+      else if(openModal.id==='custom-modal')closeCustomItem();
     }
     return;
   }
@@ -1870,7 +1951,7 @@ function openStory(){
   if(!all.length){showToast('Выбери хотя бы 1 игру');return;}
   if(all.length>5)showToast('Для сторис доступны первые 5 игр (в кадре одновременно до 3)');
   const sel=all.slice(0,5);
-  _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e'}));
+  _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
   _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
   document.getElementById('story-modal').classList.add('open');
   _stCanvas=document.getElementById('st-canvas');_stCtx=_stCanvas.getContext('2d');
@@ -1892,7 +1973,7 @@ function openStory(){
 }
 function closeStory(){document.getElementById('story-modal').classList.remove('open');}
 // Фоновый HD-апгрейд одного слота (один IGDB-запрос на игру, guard от повтора). Замыкаемся на объект g, а не на индекс — переживает reorder.
-function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
+function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
 
 // ── IMAGE PICKER (story cover swap + коллаж) ───────────────────────────
 let _pickerSlot=-1;
@@ -2209,10 +2290,11 @@ async function downloadStoryBatch(){
   _stCanvas=off;_stCtx=off.getContext('2d');_stSel=-1;
   let ok=0,fail=0;
   for(const g of list){
-    const entry={id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e'};
-    // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком
+    const entry={id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
+    // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком.
+    // Для своих товаров (custom) IGDB не дёргаем — там только игры, прилетит чужая обложка.
     const iconUrl=entry.imgUrl;
-    const hd=await _hdCoverUrl(entry.title);
+    const hd=entry.custom?null:await _hdCoverUrl(entry.title);
     const primary=hd||iconUrl;
     await new Promise(resolve=>{
       if(!primary){resolve();return;}
