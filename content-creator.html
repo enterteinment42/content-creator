@@ -1190,6 +1190,17 @@ function _displayTitle(s){
 // HD-обложка только для коллажа/сторис: ищем в IGDB по очищенному названию (console → фолбэк
 // edition, как в магазине), тянем t_1080p (≈810×1080) через VPS-прокси /igdb/img (обход DPI +
 // CORS для canvas). Возвращает крупный URL или null (слабое/не найдено) — тогда остаётся 264px.
+// Спасение честных low-вердиктов: «UFC 6» → «EA Sports UFC 6» — матч строгий (все слова запроса
+// есть в matched), low лишь из-за лишней приставки «EA Sports». Мусорный low («NBA 2K26 for» →
+// «NBA 2K26: Slam Edition») не проходит — слова «for» в matched нет. Апострофы вырезаются
+// (обе формы '/’), прочее не-буквенное → пробел (®™ не склеивают слова: Borderlands®4 → borderlands 4).
+function _lowMatchOk(q, matched){
+  if(!matched) return false;
+  const norm=s=>String(s).toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+  const mw=norm(matched).split(' ');
+  const qw=norm(q).split(' ').filter(w=>w.length>1||/^\d$/.test(w));
+  return qw.length>0 && qw.every(w=>mw.includes(w));
+}
 async function _hdCoverUrl(title){
   if(!title) return null;
   const q1=_cleanConsoleTitle(title), q2=_cleanEditionTitle(title);
@@ -1198,7 +1209,7 @@ async function _hdCoverUrl(title){
     try{
       const r=await fetch(`${API}/igdb/cover?name=${encodeURIComponent(q)}`);
       const j=await r.json();
-      if(j&&j.cover&&j.confidence&&j.confidence!=='low'){
+      if(j&&j.cover&&j.confidence&&(j.confidence!=='low'||_lowMatchOk(q,j.matched))){
         const big=j.cover.replace(/\/t_[a-z0-9_]+\//,'/t_1080p/');
         return `${API}/igdb/img?url=${encodeURIComponent(big)}`;
       }
