@@ -1387,10 +1387,18 @@ function _drawCollageWatermark(ctx,W,H){
   if(_collageMode!=='cards') return;
   const logoPos=document.getElementById('coll-card-logo')?.value||'tr';
   if(logoPos==='none'||!_collageLogoImg) return;
-  const size=Math.max(36,Math.round(Math.min(W,H)*0.09));
-  const pad=Math.max(10,Math.round(Math.min(W,H)*0.025));
+  const size=Math.max(52,Math.round(Math.min(W,H)*0.13));
+  const pad=Math.max(14,Math.round(Math.min(W,H)*0.03));
   const lx=logoPos==='tr'?W-size-pad:pad,ly=pad;
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=Math.round(size*0.3);ctx.shadowOffsetY=Math.round(size*0.06);
   _drawLogoBox(ctx,_collageLogoImg,lx,ly,size,_logoShape);
+  ctx.restore();
+  // Тонкое кольцо/рамка поверх — чтобы знак читался как бейдж над всем коллажем, а не деталь конкретной фотки.
+  ctx.save();ctx.strokeStyle='rgba(255,255,255,0.85)';ctx.lineWidth=Math.max(2,Math.round(size*0.035));
+  if(_logoShape==='plate'){rr(ctx,lx,ly,size,size,Math.round(size*0.18));ctx.stroke();}
+  else if(_logoShape!=='free'){ctx.beginPath();ctx.arc(lx+size/2,ly+size/2,size/2-ctx.lineWidth/2,0,Math.PI*2);ctx.stroke();}
+  ctx.restore();
 }
 function _redrawCirc4d(ctx,W,H){
   const cx=W/2,cy=H/2;const THETA=15*Math.PI/180;
