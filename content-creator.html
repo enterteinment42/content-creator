@@ -145,11 +145,22 @@
     #st-canvas { width: 320px; height: auto; display: block; }
     /* Мобильная сторис: канвас ограничен по высоте (не 100% ширины), иначе он занимает весь экран
        и с touch-action:none перехватывает все касания — до панелей «Шаблоны»/«Редактор» ниже не доскроллить */
+    /* Панели «Шаблоны»/«Редактор» на десктопе — колонки со своим скроллом (flex:1 + overflow-y:auto).
+       Держим это правило здесь, а не в inline-стиле: inline нельзя переопределить медиазапросом
+       без !important, а на мобильном эту пару обязательно надо снимать (см. ниже). display панелей
+       по-прежнему ставится инлайном из _stSetMode — его не трогаем. */
+    #st-tmpl-panel, #st-editor-panel { flex: 1; min-width: 0; overflow-y: auto; }
+    /* В колоночной раскладке flex:1 + overflow-y:auto схлопывают панель почти в ноль: overflow!=visible
+       обнуляет min-height:auto, панель получает ~65px при 400-500px контента, а тело модалки при этом
+       не скроллится (контент формально «влез») — до полей ввода добраться нечем. Отсюда «с телефона
+       редактор не работает, текст прописать нельзя». На мобильном отключаем собственный скролл панелей:
+       они рендерятся полной высотой, скроллит вся модалка. */
     @media(max-width:640px) {
       .st-body { flex-direction: column; }
       #st-canvas { width: auto; height: 46vh; max-width: 100%; }
       #st-canvas-wrap { align-self: center; }
       #st-canvas-hint { display: none; } /* подсказка про колёсико/Del/Ctrl+Z — десктопная */
+      #st-tmpl-panel, #st-editor-panel { flex: 0 0 auto; overflow: visible; }
     }
   </style>
 </head>
@@ -311,7 +322,7 @@
         </div>
       </div>
       <!-- TEMPLATES PANEL -->
-      <div id="st-tmpl-panel" style="flex:1;display:flex;flex-direction:column;gap:10px;overflow-y:auto;min-width:0">
+      <div id="st-tmpl-panel" style="display:flex;flex-direction:column;gap:10px">
         <!-- Platform -->
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Для:</span>
@@ -370,7 +381,7 @@
       </div>
 
       <!-- EDITOR PANEL -->
-      <div id="st-editor-panel" style="flex:1;display:none;flex-direction:column;gap:12px;overflow-y:auto;min-width:0">
+      <div id="st-editor-panel" style="display:none;flex-direction:column;gap:12px">
         <div>
           <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Добавить элемент</div>
           <div style="display:flex;flex-direction:column;gap:6px">
