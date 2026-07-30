@@ -140,6 +140,17 @@
     .coll-tz-range { flex: 1; min-width: 60px; max-width: 110px; accent-color: var(--blue); cursor: pointer; }
     .coll-tz-val { font-size: 10px; color: var(--muted); min-width: 30px; }
     @media(max-width:600px){ #coll-tz-area { display: none; } }
+    /* Таблица игр на телефоне: 7 колонок с фиксированными ширинами дают ~403px при экране 390 —
+       вся страница начинает ездить вбок. Справочные колонки (валюта закупки, наличие описания)
+       на выбор игр не влияют — прячем их; горизонтальный скролл оставляем как страховку. */
+    @media(max-width:640px) {
+      #table-wrap { overflow-x: auto; }
+      td, thead th { padding-left: 6px; padding-right: 6px; }
+      td.td-store, th.th-store, td.td-desc, th.th-desc { display: none; }
+      /* Шапка (заголовок + дата + пресеты + 3 кнопки) в одну строку не влезает и распирает страницу */
+      #app-header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+      #app-header h1 { flex: 1 0 100%; font-size: 15px; }
+    }
     /* ── Story ── */
     .st-body { display: flex; gap: 16px; padding: 12px 18px; }
     #st-canvas { width: 320px; height: auto; display: block; }
@@ -200,10 +211,10 @@
           <th class="td-check"><input type="checkbox" id="check-all" onchange="toggleAll(this.checked)" title="Выбрать все видимые"></th>
           <th></th>
           <th>Название</th>
-          <th title="Валюта закупки">Валюта</th>
+          <th class="th-store" title="Валюта закупки">Валюта</th>
           <th class="sortable" onclick="setSort('price')">Цена <span class="sort-ind" id="sort-price"></span></th>
           <th class="sortable" onclick="setSort('discount')">Скидка <span class="sort-ind" id="sort-discount"></span></th>
-          <th title="Есть описание">📝</th>
+          <th class="th-desc" title="Есть описание">📝</th>
         </tr>
       </thead>
       <tbody id="game-tbody"></tbody>
@@ -401,6 +412,10 @@
               <span style="font-size:18px">🔗</span><div><div style="font-size:12px;font-weight:700;color:var(--text)">QR-код</div><div style="font-size:10px;color:var(--muted)">Ссылка на карточку активной игры</div></div>
             </button>
           </div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Элементы на сторис</div>
+          <div id="st-layers" style="display:flex;flex-direction:column;gap:4px"></div>
         </div>
         <div>
           <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Свойства элемента</div>
@@ -1639,7 +1654,7 @@ function _stSetMode(mode){
   document.getElementById('st-editor-panel').style.display=mode==='editor'?'flex':'none';
   const hint=document.getElementById('st-canvas-hint');if(hint)hint.style.display=mode==='editor'?'':'none';
   if(mode==='templates') _stRenderTemplate();
-  else _stRender();
+  else {_stRender();_stRenderSidebar();} // список элементов и свойства должны быть актуальны сразу при входе в редактор
 }
 function _stSetPlatform(p){
   _stPlatform=p;
@@ -2300,9 +2315,27 @@ function _stBuildGameList(){
   document.querySelectorAll('.st-gc-btn').forEach((b,i)=>{const active=(i+1)===_stGameCount;const avail=(i+1)<=_stG.length;b.style.background=active?'var(--blue)':'transparent';b.style.color=active?'#fff':avail?'var(--muted)':'var(--border)';b.disabled=!avail;});
   el.innerHTML=_stG.map((g,i)=>{const isActive=i<_stGameCount;const bgBtns=Object.entries(_ST_BG).map(([key,p])=>{const bgStyle=key==='image'?'background:linear-gradient(135deg,#555,#999)':p.colors?`background:linear-gradient(to bottom,${p.colors[0]},${p.colors[1]})`:'background:#555';const sel=(g.bg||'image')===key;return `<div onclick="stSetSlotBg(${i},'${key}')" style="${bgStyle};width:13px;height:13px;border-radius:2px;cursor:pointer;flex-shrink:0;${sel?'outline:2px solid #4fc3f7;outline-offset:1px':''}" title="${key}"></div>`;}).join('');return `<div style="display:flex;align-items:center;gap:5px;padding:5px 7px;border-radius:6px;background:var(--card);border:1px solid ${isActive?'rgba(0,112,209,0.5)':'var(--border)'}"><div style="width:15px;height:15px;border-radius:50%;background:${isActive?'var(--blue)':'var(--border)'};color:${isActive?'#fff':'var(--muted)'};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>${g.imgUrl?`<img src="${esc(g.imgUrl)}" style="width:22px;height:29px;object-fit:cover;border-radius:2px;flex-shrink:0" onerror="this.style.opacity='0.2'">` : '<div style="width:22px;height:29px;background:var(--border);border-radius:2px;flex-shrink:0"></div>'}<div style="flex:1;min-width:0;font-size:10px;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(g.title.length>16?g.title.slice(0,14)+'…':g.title)}</div><div style="display:flex;gap:2px;align-items:center">${bgBtns}</div><button onclick="event.stopPropagation();_stPickImg(${i})" title="Сменить обложку" style="width:22px;height:29px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--muted);font-size:11px;cursor:pointer;padding:0;flex-shrink:0">🖼</button><div style="display:flex;flex-direction:column;gap:1px;flex-shrink:0"><button onclick="stReorderGame(${i},-1)" ${i===0?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▲</button><button onclick="stReorderGame(${i},1)" ${i===_stG.length-1?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▼</button></div></div>`;}).join('');
 }
+// Список элементов: на телефоне попасть пальцем в объект на канвасе ~200px шириной почти нереально,
+// поэтому выбор идёт строкой списка. Порядок — сверху верхний слой (как в графических редакторах).
+const _ST_EL_ICON={overlay:'🌑',price:'💰',sticker:'🏷',logo:'🏪',qr:'🔗'};
+const _ST_EL_NAME={overlay:'Оверлей',price:'Цена',sticker:'Стикер',logo:'Логотип',qr:'QR-код'};
+function _stElLabel(el){
+  const t=_ST_EL_NAME[el.type]||el.type;const txt=(el.text||'').trim();
+  return txt?`${t}: ${txt.length>24?txt.slice(0,22)+'…':txt}`:t;
+}
+function _stRenderLayers(){
+  const box=document.getElementById('st-layers');if(!box) return;
+  if(!_stEls.length){box.innerHTML='<div style="color:var(--muted);font-size:10px;padding:8px 0;text-align:center">Пусто — добавь элемент кнопкой выше</div>';return;}
+  box.innerHTML=_stEls.map((el,i)=>({el,i})).reverse().map(({el,i})=>{
+    const sel=i===_stSel;
+    return `<div onclick="_stSelectEl(${i})" style="display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:6px;cursor:pointer;background:${sel?'rgba(0,112,209,.18)':'var(--card)'};border:1px solid ${sel?'var(--blue)':'var(--border)'}"><span style="font-size:14px;flex-shrink:0">${_ST_EL_ICON[el.type]||'▫️'}</span><span style="flex:1;min-width:0;font-size:11px;color:${sel?'var(--text)':'var(--muted)'};overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(_stElLabel(el))}</span></div>`;
+  }).join('');
+}
+function _stSelectEl(i){if(!_stEls[i]) return;_stSel=i;_stRender();_stRenderSidebar();}
 function _stRenderSidebar(){
+  _stRenderLayers();
   const el=document.getElementById('st-props');if(!el) return;
-  if(_stSel<0||!_stEls[_stSel]){el.innerHTML='<div style="color:var(--muted);font-size:11px;text-align:center;padding:14px 0;line-height:1.8">Кликни элемент на превью<br><span style="font-size:10px">Тяни фон = панорама · колёсико = зум · Del = удалить · Ctrl+Z = отменить</span></div>';return;}
+  if(_stSel<0||!_stEls[_stSel]){el.innerHTML='<div style="color:var(--muted);font-size:11px;text-align:center;padding:14px 0;line-height:1.8">Выбери элемент в списке выше или тапни его на превью<br><span style="font-size:10px">Тяни фон = панорама · колёсико = зум · Del = удалить · Ctrl+Z = отменить</span></div>';return;}
   const e=_stEls[_stSel];const isOverlay=e.type==='overlay';const isSticker=e.type==='sticker';const isLogo=e.type==='logo';const isQr=e.type==='qr';
   const typeLabel=isOverlay?'Оверлей':e.type==='price'?'Цена':isSticker?'Стикер':isQr?'QR-код':'Логотип';
   let html=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><span style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.5px">${typeLabel}</span><div style="display:flex;gap:4px"><button onclick="stMoveDown()" style="background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:11px;padding:3px 7px;cursor:pointer" title="Слой назад">↓</button><button onclick="stMoveUp()" style="background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:11px;padding:3px 7px;cursor:pointer" title="Слой вперёд">↑</button><button onclick="stDuplicateSel()" style="background:var(--card);border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:11px;padding:3px 7px;cursor:pointer" title="Дублировать">⎘</button><button onclick="stDeleteSel()" style="background:rgba(220,50,50,.15);border:1px solid rgba(220,50,50,.3);border-radius:4px;color:#e05;font-size:11px;padding:3px 7px;cursor:pointer" title="Удалить (Del)">✕</button></div></div>`;
@@ -2316,7 +2349,7 @@ function _stRenderSidebar(){
   el.innerHTML=html;
 }
 function _stHexColor(c){if(!c||c.startsWith('rgba')||c.startsWith('rgb')) return '#000000';return c;}
-function _stProp(k,v){if(_stSel<0) return;_stEls[_stSel][k]=v;_stRender();}
+function _stProp(k,v){if(_stSel<0) return;_stEls[_stSel][k]=v;_stRender();if(k==='text')_stRenderLayers();}
 function _stPropN(k,v){if(_stSel<0) return;_stEls[_stSel][k]=parseFloat(v);_stRender();}
 function _stPropBg(v){if(_stSel<0) return;_stEls[_stSel].bgColor=v;_stRender();}
 function _stBgColor(hex){if(_stSel<0) return;_stEls[_stSel].bgColor=hex;const inp=document.querySelector('#st-props input[type="text"][oninput="_stPropBg(this.value)"]');if(inp)inp.value=hex;_stRender();}
