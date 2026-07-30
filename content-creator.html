@@ -376,14 +376,15 @@
         <!-- Description zone controls -->
         <div>
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:5px"><input type="checkbox" id="st-desc-on" checked onchange="_stDescOn=this.checked;localStorage.setItem('cc_desc_on',this.checked?'1':'0');_stRenderTemplate()" style="accent-color:var(--blue)"> Описание на картинке</label>
-          <div id="st-desc-game-row" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">Игра: <select id="st-desc-game" onchange="_stDescGame=+this.value;_stRenderTemplate()" style="background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:3px 6px;outline:none"><option value="0">1</option></select> <button class="bf sec" id="st-gen-short-btn" onclick="_stGenShortDescs()" style="padding:4px 8px;font-size:10px">🤖 Текст</button> <span id="st-gen-short-prog" style="display:none;font-size:10px;color:var(--accent)">...</span></div>
+          <div id="st-desc-game-row" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">Игра: <select id="st-desc-game" onchange="_stDescGame=+this.value;_stSyncDescEdit(true);_stRenderTemplate()" style="background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:3px 6px;outline:none"><option value="0">1</option></select> <button class="bf sec" id="st-gen-short-btn" onclick="_stGenShortDescs()" style="padding:4px 8px;font-size:10px">🤖 Текст</button> <span id="st-gen-short-prog" style="display:none;font-size:10px;color:var(--accent)">...</span></div>
+          <textarea id="st-desc-edit" rows="2" oninput="_stEditDesc(this.value)" placeholder="Текст описания на картинке — можно писать и править вручную" title="То, что попадёт на саму сторис. Кнопка «🤖 Текст» заполняет это поле, дальше правь как хочешь." style="width:100%;box-sizing:border-box;margin-top:5px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;padding:6px;resize:vertical;font-family:inherit;outline:none"></textarea>
         </div>
         <!-- TG caption -->
         <div id="st-tg-caption-panel" style="display:none">
           <button class="bf sec" id="st-gen-cap-btn" onclick="_stGenCaption()">📝 Текст к сторис (TG)</button>
           <div id="st-cap-out" class="opanel" style="display:none;margin-top:8px">
             <div class="ot">ТЕКСТ К СТОРИС:</div>
-            <pre id="st-cap-text"></pre>
+            <textarea id="st-cap-text" rows="7" oninput="_stCapText=this.value" title="Текст сгенерирован ИИ, но правится вручную — копируется то, что видишь" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;line-height:1.45;padding:8px;resize:vertical;font-family:inherit;outline:none"></textarea>
             <div class="bf2" style="margin-top:6px"><button class="bf grn" onclick="_stCopyCap()">📋 Копировать</button></div>
           </div>
         </div>
@@ -1819,27 +1820,38 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   else{const grd=ctx.createLinearGradient(x,y,x,y+h);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(x,y,w,h);}
   if(!g)return;
   const pad=Math.round(18*sx),tfs=Math.max(34*sx,14),pfs=Math.max(52*sx,18),tlh=tfs*1.15;
-  ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,w-pad*2-80*sx,2);ctx.restore();
+  // бейдж скидки уехал к цене вниз, поэтому заголовку доступна вся ширина плашки
+  ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,w-pad*2,2);ctx.restore();
   const titleH=tlines.length*tlh;
   // CC-8: описание рисуем ВНУТРИ плашки под ценой; высота плашки растёт от контента (без описания — как раньше, 30%)
   const descStr=(showDesc&&_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
   const dfs=Math.max(28*sx,11),dlh=dfs*1.32;let dlines=[];
   if(descStr){ctx.save();ctx.font=`${dfs}px 'Noto Sans',sans-serif`;dlines=_wrapLines(ctx,descStr,w-pad*2,2);ctx.restore();}
-  const descH=dlines.length?dlines.length*dlh+Math.round(10*sx):0;
-  const baseH=Math.round(h*0.30),cardH=descH?Math.min(Math.round(h*0.52),baseH+descH+Math.round(8*sx)):baseH,cardY=y+h-cardH;
+  const descH=dlines.length?dlines.length*dlh:0;
+  // Высота плашки — те же ~30% слота; растёт только если контент физически не влезает (мини-карточки).
+  const baseH=Math.round(h*0.30),needH=Math.round(14*sx)*2+titleH+descH+pfs+Math.round(18*sx);
+  const cardH=Math.max(baseH,Math.min(Math.round(h*0.52),needH)),cardY=y+h-cardH;
   if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.92)';ctx.fillRect(x,cardY,w,cardH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,cardY,w,Math.max(3,Math.round(3*sx)));}
   else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,cardY-Math.round(cardH*.6),0,y+h);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.82)');grd.addColorStop(1,'rgba(8,8,20,.97)');ctx.fillStyle=grd;ctx.fillRect(x,cardY-Math.round(cardH*.6),w,cardH+Math.round(cardH*.6));}
   else{ctx.fillStyle='rgba(6,6,16,0.88)';ctx.fillRect(x,cardY,w,cardH);}
-  let cy=cardY+Math.round(14*sx);
+  // Контент распределён по всей высоте плашки (как в коллаже): название у верхней кромки, цена и
+  // бейдж скидки — у нижней, описание — по центру свободного места между ними. Иначе текст жался
+  // к верху, а нижние две трети плашки оставались пустыми.
+  const vpad=Math.round(14*sx);
   ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
-  tlines.forEach((l,li)=>ctx.fillText(l,x+pad,cy+li*tlh));ctx.restore();
-  cy+=titleH+Math.round(8*sx);
-  if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cy);ctx.restore();cy+=pfs;}
-  if(dlines.length){cy+=Math.round(10*sx);ctx.save();ctx.font=`${dfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(210,210,228,0.92)';ctx.textAlign='left';ctx.textBaseline='top';dlines.forEach((l,li)=>ctx.fillText(l,x+pad,cy+li*dlh));ctx.restore();}
-  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-Math.round(14*sx),by=cardY+Math.round(14*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  tlines.forEach((l,li)=>ctx.fillText(l,x+pad,cardY+vpad+li*tlh));ctx.restore();
+  const priceY=y+h-vpad-pfs;
+  if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,priceY);ctx.restore();}
+  if(dlines.length){
+    const top=cardY+vpad+titleH+Math.round(6*sx),bot=priceY-Math.round(6*sx);
+    const dy=top+Math.max(0,(bot-top-descH)/2);
+    ctx.save();ctx.font=`${dfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(210,210,228,0.92)';ctx.textAlign='left';ctx.textBaseline='top';
+    dlines.forEach((l,li)=>ctx.fillText(l,x+pad,dy+li*dlh));ctx.restore();
+  }
+  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-pad,by=Math.round(priceY+(pfs-bh)/2);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
 }
-function _stDrawDescZone(ctx,x,y,w,g){
-  if(!_stDescOn||!g||!_stShortDescs[g.title])return;
+function _stDrawDescZone(ctx,x,y,w,g,measureOnly){
+  if(!_stDescOn||!g||!_stShortDescs[g.title])return 0;
   const sx=ctx.canvas.width/STORY_W,desc=_stShortDescs[g.title],fs=Math.max(34*sx,12),pad=Math.round(16*sx),lh=fs*1.4;
   ctx.save();ctx.font=`${fs}px 'Noto Sans',sans-serif`;
   const words=desc.split(' '),lines=[];let line='';
@@ -1847,13 +1859,32 @@ function _stDrawDescZone(ctx,x,y,w,g){
   if(line)lines.push(line);
   if(lines.length>2){lines.length=2;let last=lines[1];while(ctx.measureText(last+'…').width>w-pad*2&&last.length>1)last=last.slice(0,-1);lines[1]=last.replace(/\s+$/,'')+'…';}
   const barH=lines.length*lh+pad*2;
-  y=Math.max(0,Math.min(y,ctx.canvas.height-barH)); // CC-6: не выпускать плашку описания за нижний край холста (Каскад n=3)
-  ctx.fillStyle='rgba(6,6,18,0.82)';ctx.fillRect(x,y,w,barH);
+  if(measureOnly){ctx.restore();return barH;} // вызывающий шаблон сначала меряет блок, потом верстает от него
+  y=Math.max(0,Math.min(y,ctx.canvas.height-barH)); // CC-6: не выпускать зону описания за нижний край холста (Каскад n=3)
+  // Своей подложки у описания больше нет: во всех шаблонах оно ложится либо на тёмную карточку,
+  // либо на затемнённый низ фона — вторая тёмная плашка поверх первой читалась как лишний прямоугольник.
   ctx.fillStyle='rgba(200,200,220,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
   lines.forEach((l,i)=>ctx.fillText(l,x+pad,y+pad+i*lh));
   ctx.restore();
+  return barH;
 }
 
+// Описание на картинке правится вручную: ИИ только заполняет поле, дальше владеет им пользователь.
+function _stDescTargetGame(){
+  const n=Math.min(_stGameCount,_stG.length,3);
+  return _stG[Math.max(0,Math.min(_stDescGame,n-1))]||null;
+}
+function _stEditDesc(v){
+  const g=_stDescTargetGame();if(!g)return;
+  if(v.trim())_stShortDescs[g.title]=v; else delete _stShortDescs[g.title];
+  _stRenderTemplate();
+}
+function _stSyncDescEdit(force){
+  const ta=document.getElementById('st-desc-edit');if(!ta)return;
+  if(!force&&document.activeElement===ta)return; // не перебиваем то, что человек печатает прямо сейчас
+  const g=_stDescTargetGame();
+  ta.value=g?(_stShortDescs[g.title]||''):'';
+}
 // ── Template Renderer (dispatcher) ────────────────────────
 function _stRenderTemplate(){
   if(!_stCtx||_stMode!=='templates')return;
@@ -1863,6 +1894,7 @@ function _stRenderTemplate(){
   if(sel){sel.innerHTML=Array.from({length:n},(_,i)=>`<option value="${i}">${i+1}</option>`).join('');sel.value=String(Math.min(_stDescGame,n-1));}
   const dgr=document.getElementById('st-desc-game-row');if(dgr)dgr.style.display=_stDescOn?'':'none';
   const dgs=document.getElementById('st-desc-game');if(dgs)dgs.style.display=n>1?'':'none';
+  _stSyncDescEdit();
   ({poster:_stTplPoster,cards:_stTplCard1,hero:_stTplHero,fan:_stTplFan,diag:_stTplDiag,cascade:_stTplCascade,horizon:_stTplHorizon,neon:_stTplNeon}[_stTplId]||_stTplCard1)();
   if(_stLogoImg&&_stLogoPos!=='none')_stDrawTemplateLogo(_stCtx,_stCanvas.width,_stCanvas.height,_stCanvas.width/STORY_W);
 }
@@ -1880,14 +1912,19 @@ function _stTplPoster(){
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(48*sx,16),pfs=Math.max(Math.round(72*sx),24);
   const hasDesc=_stDescOn&&_stShortDescs[g.title];
-  const baseY=hasDesc?Math.round(ch*.72):Math.round(ch*.78);
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='bottom';
+  // Название + цена + описание — один блок, прижатый к низу кадра: раньше блок стоял на фиксированной
+  // высоте (72-78%), и под ним оставалась пустая тёмная полоса примерно в пятую часть сторис.
   const tlh=tfs*1.08;
-  const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);
-  tlines.forEach((l,li)=>ctx.fillText(l,pad,baseY-(tlines.length-1-li)*tlh));ctx.restore();
-  if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',pad,baseY+Math.round(8*sx));ctx.restore();}
-  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
-  if(hasDesc)_stDrawDescZone(ctx,0,baseY+pfs+Math.round(18*sx),cw,g);
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);ctx.restore();
+  const descH=hasDesc?_stDrawDescZone(ctx,0,0,cw,g,true):0;
+  const blockH=tlines.length*tlh+Math.round(10*sx)+pfs+(descH?descH:0);
+  const blockTop=Math.round(ch-Math.round(ch*.055)-blockH);
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';
+  tlines.forEach((l,li)=>ctx.fillText(l,pad,blockTop+li*tlh));ctx.restore();
+  const priceY=blockTop+tlines.length*tlh+Math.round(10*sx);
+  if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',pad,priceY);ctx.restore();}
+  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(hasDesc)_stDrawDescZone(ctx,0,priceY+pfs,cw,g);
 }
 function _stTplCard1(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height;
@@ -1941,6 +1978,7 @@ function _stTplFan(){
   }
   ctx.restore();
   const colW=cw/n;
+  let infoBottom=Math.round(ch*.62); // низ самого длинного инфоблока — от него ведём описание
   for(let i=0;i<n;i++){
     const g=_stG[i];if(!g)continue;
     const bx=i*colW,midX=bx+colW/2,botY=Math.round(ch*.62); // CC-7: инфоблок выше
@@ -1951,9 +1989,12 @@ function _stTplFan(){
     tlines.forEach((l,li)=>ctx.fillText(l,midX,botY+li*tlh));ctx.restore();
     const titleH=tlines.length*tlh;
     if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',midX,botY+titleH+Math.round(6*sx));ctx.restore();}
-    if(g.discount){const bw=Math.round(64*sx),bh=Math.round(bfss*1.6),badgeX=midX-bw/2,badgeY=botY+titleH+pfs+Math.round(14*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(badgeX,badgeY,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfss}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',midX,badgeY+bh/2);ctx.restore();}
+    let colBottom=botY+titleH+pfs+Math.round(10*sx);
+    if(g.discount){const bw=Math.round(64*sx),bh=Math.round(bfss*1.6),badgeX=midX-bw/2,badgeY=botY+titleH+pfs+Math.round(14*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(badgeX,badgeY,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfss}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',midX,badgeY+bh/2);ctx.restore();colBottom=badgeY+bh;}
+    infoBottom=Math.max(infoBottom,colBottom);
   }
-  if(_stDescOn){const dg=Math.min(_stDescGame,n-1);_stDrawDescZone(ctx,0,Math.round(ch*.80),cw,_stG[dg]);}
+  // описание идёт сразу под инфоблоками, а не на фиксированных 80% — иначе между ними зияла дыра
+  if(_stDescOn){const dg=Math.min(_stDescGame,n-1);_stDrawDescZone(ctx,0,Math.round(infoBottom+14*sx),cw,_stG[dg]);}
 }
 function _stTplDiag(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height,sx=cw/STORY_W;
@@ -1965,15 +2006,21 @@ function _stTplDiag(){
   ctx.fillStyle='rgba(4,4,16,0.93)';ctx.fill();ctx.restore();
   ctx.save();ctx.strokeStyle='rgba(0,112,209,0.9)';ctx.lineWidth=Math.round(4*sx);ctx.beginPath();ctx.moveTo(0,Math.round(ch*.42));ctx.lineTo(cw,Math.round(ch*.62));ctx.stroke();ctx.restore();
   if(!g)return;
-  const pad=Math.round(24*sx),tfs=Math.max(44*sx,14),pfs=Math.max(Math.round(66*sx),22),infoY=Math.round(ch*.46);
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';
+  const pad=Math.round(24*sx),tfs=Math.max(44*sx,14),pfs=Math.max(Math.round(66*sx),22);
   const tlh=tfs*1.1;
-  const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);
-  tlines.forEach((l,li)=>ctx.fillText(l,pad,infoY+li*tlh));ctx.restore();
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);ctx.restore();
   const titleH=tlines.length*tlh;
+  // Блок текста прижат к низу тёмного клина (над рядом мини-обложек, если он есть) — фиксированные 46%
+  // оставляли под ценой пустую тёмную зону
+  const dscH=(_stDescOn&&_stShortDescs[g.title])?_stDrawDescZone(ctx,0,0,cw,g,true):0;
+  const blockH=titleH+Math.round(10*sx)+pfs+dscH;
+  const bottomLimit=n>1?ch-Math.round(ch*.15)-pad:ch-Math.round(ch*.05);
+  const infoY=Math.max(Math.round(ch*.46),Math.round(bottomLimit-blockH));
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';
+  tlines.forEach((l,li)=>ctx.fillText(l,pad,infoY+li*tlh));ctx.restore();
   if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',pad,infoY+titleH+Math.round(10*sx));ctx.restore();}
-  if(g.discount){const bfs=Math.max(Math.round(32*sx),11),bw=Math.round(110*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
-  if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,infoY+titleH+pfs+Math.round(22*sx),cw,g);
+  if(g.discount){const bfs=Math.max(Math.round(32*sx),11),bw=Math.round(110*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(dscH)_stDrawDescZone(ctx,0,infoY+titleH+Math.round(10*sx)+pfs,cw,g);
   if(n>1){const miniH=Math.round(ch*.15),maxMiniW=Math.round(miniH*.78),miniW=Math.min(Math.round(cw/(n-1)),maxMiniW),totalW=miniW*(n-1),startX=Math.round((cw-totalW)/2);for(let i=1;i<n;i++)_stDrawCoverCard(ctx,startX+(i-1)*miniW,ch-miniH,miniW,miniH,_stG[i]);}
 }
 function _stTplCascade(){
@@ -2000,26 +2047,40 @@ function _stTplCascade(){
     if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.90)';ctx.fillRect(x,plY,cardW,plH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,plY,cardW,Math.max(3,Math.round(3*sx)));}
     else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,plY-Math.round(plH*.6),0,cy+cardH);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.80)');grd.addColorStop(1,'rgba(8,8,20,.96)');ctx.fillStyle=grd;ctx.fillRect(x,plY-Math.round(plH*.6),cardW,plH+Math.round(plH*.6));}
     else{ctx.fillStyle='rgba(6,6,16,0.86)';ctx.fillRect(x,plY,cardW,plH);}
-    const tfs=Math.max(32*sx,12),pfs=Math.max(Math.round(48*sx),16);
-    let cy2=plY+Math.round(10*sx);
+    // как в коллаже: название у верхней кромки плашки, цена и скидка — у нижней
+    const tfs=Math.max(32*sx,12),pfs=Math.max(Math.round(48*sx),16),vpad=Math.round(10*sx);
     ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='left';ctx.textBaseline='top';
     const tlh=tfs*1.1;
-    const tlines=_wrapLines(ctx,g.title,cardW-pad*2-Math.round(70*sx),2);
-    tlines.forEach((l,li)=>ctx.fillText(l,x+pad,cy2+li*tlh));ctx.restore();
-    cy2+=tlines.length*tlh+Math.round(6*sx);
-    if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cy2);ctx.restore();}
-    if(g.discount){const bfs=Math.max(Math.round(20*sx),8),bw=Math.round(70*sx),bh=Math.round(bfs*1.6),bx=x+cardW-bw-Math.round(10*sx),by=plY+Math.round(10*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+    const tlines=_wrapLines(ctx,g.title,cardW-pad*2,2);
+    tlines.forEach((l,li)=>ctx.fillText(l,x+pad,plY+vpad+li*tlh));ctx.restore();
+    const cPriceY=plY+plH-vpad-pfs;
+    if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cPriceY);ctx.restore();}
+    if(g.discount){const bfs=Math.max(Math.round(20*sx),8),bw=Math.round(70*sx),bh=Math.round(bfs*1.6),bx=x+cardW-bw-pad,by=Math.round(cPriceY+(pfs-bh)/2);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
     ctx.restore();
   }
   if(_stDescOn){const dg=Math.min(_stDescGame,n-1);const descY=startY+(n-1)*step+cardH+Math.round(ch*.015);_stDrawDescZone(ctx,0,descY,cw,_stG[dg]);}
 }
+// Размер и отступ логотипа — те же правила, что у водяного знака коллажа (13% меньшей стороны),
+// раньше на сторис было жёстко 80px при ширине 1080 = 7.4%, знак терялся.
+function _stLogoSize(cw,ch){return Math.max(52,Math.round(Math.min(cw,ch)*0.13));}
+function _stLogoPad(cw,ch){return Math.max(14,Math.round(Math.min(cw,ch)*0.03));}
+// Сколько места логотип занимает в правом верхнем углу — чтобы бейдж скидки не залезал под него.
+function _stTopRightBlocked(cw,ch){
+  if(!_stLogoImg||_stLogoPos!=='tr') return 0;
+  return _stLogoSize(cw,ch)+_stLogoPad(cw,ch);
+}
 function _stDrawTemplateLogo(ctx,cw,ch,sx){
   if(!_stLogoImg) return;
-  const lSize=Math.round(80*sx);const pad=Math.round(16*sx);
-  let lx,ly;
-  if(_stLogoPos==='tr'){lx=cw-lSize-pad;ly=pad;}
-  else{lx=pad;ly=pad;}
+  const lSize=_stLogoSize(cw,ch),pad=_stLogoPad(cw,ch);
+  const lx=_stLogoPos==='tr'?cw-lSize-pad:pad,ly=pad;
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.55)';ctx.shadowBlur=Math.round(lSize*0.3);ctx.shadowOffsetY=Math.round(lSize*0.06);
   _drawLogoBox(ctx,_stLogoImg,lx,ly,lSize,_logoShape);
+  ctx.restore();
+  ctx.save();ctx.strokeStyle='rgba(255,255,255,0.85)';ctx.lineWidth=Math.max(2,Math.round(lSize*0.035));
+  if(_logoShape==='plate'){ctx.beginPath();ctx.roundRect(lx,ly,lSize,lSize,Math.round(lSize*0.18));ctx.stroke();}
+  else if(_logoShape!=='free'){ctx.beginPath();ctx.arc(lx+lSize/2,ly+lSize/2,lSize/2-ctx.lineWidth/2,0,Math.PI*2);ctx.stroke();}
+  ctx.restore();
 }
 
 // ── Template → Editor ─────────────────────────────────────
@@ -2093,7 +2154,7 @@ async function _stGenCaption(){
     }
     const lines=sel.map(g=>{const desc=g.description||genDescs[g.title]||'';const price=g.priceRUB?` — ${g.priceRUB.toLocaleString('ru')} руб.`:'';return `${pickEmoji({title:g.title,description:desc})} ${g.title}${price}\n${desc}`.trim();});
     _stCapText=lines.join('\n\n');
-    document.getElementById('st-cap-text').textContent=_stCapText;
+    document.getElementById('st-cap-text').value=_stCapText; // поле редактируемое: правки уезжают в _stCapText через oninput
     document.getElementById('st-cap-out').style.display='';
     showToast('✅ Текст готов');
   }catch(e){showToast('Ошибка: '+e.message);}
@@ -2371,7 +2432,7 @@ function _stTplHorizon(){
   const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);
   tlines.forEach((l,li)=>ctx.fillText(l,cw/2,centerY-(tlines.length-1-li)*tlh));ctx.restore();
   if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.shadowColor='rgba(240,192,32,0.50)';ctx.shadowBlur=Math.round(20*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,centerY+Math.round(6*sx));ctx.restore();}
-  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(n>1){
     const extras=Math.min(n-1,2),mw=Math.round(cw*(extras===1?.26:.20)),mh=Math.round(mw*4/3),my=Math.round(ch*.62);
     const totalW=extras*mw+(extras-1)*Math.round(12*sx);let mx=Math.round((cw-totalW)/2);
@@ -2383,7 +2444,9 @@ function _stTplHorizon(){
       mx+=mw+Math.round(12*sx);
     }
   }
-  if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,Math.round(ch*.88),cw,g);
+  // без мини-обложек описание подтягиваем прямо под цену — иначе оно висело отдельной строкой у
+  // нижнего края, оторванное от блока с названием и ценой (раньше это скрывала собственная плашка)
+  if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,n>1?Math.round(ch*.88):Math.round(centerY+pfs+Math.round(20*sx)),cw,g);
 }
 // ── NEW Template: Неоновый ─────────────────────────────────
 function _stTplNeon(){
@@ -2405,7 +2468,7 @@ function _stTplNeon(){
   if(!g)return;
   const pfs=Math.max(Math.round(76*sx),24);
   if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor='rgba(240,192,32,0.60)';ctx.shadowBlur=Math.round(18*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,Math.round(ch*(_nMulti?.76:.84)));ctx.restore();}
-  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(n>1){
     const extras=Math.min(n-1,2),mh=Math.round(ch*.12),mw=Math.round(mh*.78),gap=Math.round(14*sx); // CC-7: мини-обложки крупнее и читаемее
     const totalW=extras*mw+(extras-1)*gap;let mx=Math.round((cw-totalW)/2);
