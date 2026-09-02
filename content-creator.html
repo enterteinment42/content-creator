@@ -1535,17 +1535,23 @@ function _lowMatchOk(q, matched){
 async function _hdCoverUrl(title){
   if(!title) return null;
   const q1=_cleanConsoleTitle(title), q2=_cleanEditionTitle(title);
+  let lastQ=null, lastConf=null, lastMatched=null; // для журнала: почему HD не поехал
   for(const q of [q1, (q2&&q2!==q1)?q2:null]){
     if(!q) continue;
     try{
       const r=await fetch(`${API}/igdb/cover?name=${encodeURIComponent(q)}`);
       const j=await r.json();
+      lastQ=q; lastConf=(j&&j.confidence)||null; lastMatched=(j&&j.matched)||null;
       if(j&&j.cover&&j.confidence&&(j.confidence!=='low'||_lowMatchOk(q,j.matched))){
+        jEvent('hd_ok',{title,q,confidence:j.confidence,matched:j.matched||null});
         const big=j.cover.replace(/\/t_[a-z0-9_]+\//,'/t_1080p/');
         return `${API}/igdb/img?url=${encodeURIComponent(big)}`;
       }
-    }catch(_){}
+    }catch(e){ jError('hd_cover',e&&e.message,{title,q}); }
   }
+  // Тихая деградация до мыльной 264px-обложки из снапшота: до журнала этого не
+  // было видно вообще — ни какие игры страдают, ни почему матч не прошёл.
+  jEvent('hd_miss',{title,q:lastQ,confidence:lastConf,matched:lastMatched});
   return null;
 }
 let collageCovers=[];
@@ -1576,6 +1582,8 @@ function openCollage(){
   if(!all.length){showToast('Выбери хотя бы 1 игру');return;}
   const sel=all.slice(0,5);
   if(all.length>5)showToast('Для коллажа берутся первые 5 игр');
+  jChainNew('collage');
+  jEvent('used',Object.assign({feature:'openCollage',mode:_collageMode,layout:_collageLayout,bgStyle:_collageBgStyle,logoShape:_logoShape,dropped:all.length-sel.length},jSelSnapshot(sel)));
   _preloadCollageLogo();
   collageCovers=sel.map(g=>({title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount,img:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null)),imgEl:null,transform:null,custom:!!g._custom}));
   _updateLayoutRadios(collageCovers.length);
@@ -1628,10 +1636,13 @@ function _slotReset(i){initT(i);collageCovers[i].transform={ox:0,oy:0,scale:1};d
 function _selectSlot(i){_selSlot=i;collageCovers.forEach((_,j)=>{const c=document.getElementById(`sc-${j}`);if(c)c.style.borderColor=j===i?'var(--accent)':(collageCovers[j].imgEl?'var(--blue)':'var(--border)');});_updateSlotBar();}
 function resetCanvas(){const canvas=document.getElementById('coll-canvas');const hint=document.getElementById('coll-hint');const dl=document.getElementById('dl-btn');const dls=document.getElementById('dl-square-btn');const dlp=document.getElementById('dl-preview-btn');const dlt=document.getElementById('dl-topost-btn');if(canvas)canvas.style.display='none';if(hint)hint.style.display='';if(dl)dl.style.display='none';if(dls)dls.style.display='none';if(dlp)dlp.style.display='none';if(dlt)dlt.style.display='none';_previewCells=[];}
 function initT(i){if(!collageCovers[i]) return;if(!collageCovers[i].transform)collageCovers[i].transform={ox:0,oy:0,scale:1};}
-function closeCollage(){const m=document.getElementById('coll-modal');if(m)m.classList.remove('open');collageCovers=[];_previewCells=[];_prevDrag={active:false,idx:-1,lx:0,ly:0};_selSlot=-1;}
-function setCollageMode(mode){_collageMode=mode;document.getElementById('coll-mode-covers').style.background=mode==='covers'?'var(--blue)':'transparent';document.getElementById('coll-mode-covers').style.color=mode==='covers'?'#fff':'var(--muted)';document.getElementById('coll-mode-cards').style.background=mode==='cards'?'var(--blue)':'transparent';document.getElementById('coll-mode-cards').style.color=mode==='cards'?'#fff':'var(--muted)';const opts=document.getElementById('coll-card-opts');if(opts)opts.style.display=mode==='cards'?'flex':'none';previewCollage();}
+function closeCollage(){
+  if(_jChainKind==='collage'&&!_jExported)jEvent('rejected',Object.assign({kind:'collage',reason:'closed',decisionMin:_jMinutes()},_jCollageState()));
+  _jAggFlushAll();jFlush();
+  const m=document.getElementById('coll-modal');if(m)m.classList.remove('open');collageCovers=[];_previewCells=[];_prevDrag={active:false,idx:-1,lx:0,ly:0};_selSlot=-1;}
+function setCollageMode(mode){jEvent('used',{feature:'collageMode',from:_collageMode,to:mode});_collageMode=mode;document.getElementById('coll-mode-covers').style.background=mode==='covers'?'var(--blue)':'transparent';document.getElementById('coll-mode-covers').style.color=mode==='covers'?'#fff':'var(--muted)';document.getElementById('coll-mode-cards').style.background=mode==='cards'?'var(--blue)':'transparent';document.getElementById('coll-mode-cards').style.color=mode==='cards'?'#fff':'var(--muted)';const opts=document.getElementById('coll-card-opts');if(opts)opts.style.display=mode==='cards'?'flex':'none';previewCollage();}
 document.addEventListener('mousemove',e=>{if(!_prevDrag.active) return;const i=_prevDrag.idx;initT(i);collageCovers[i].transform.ox+=e.clientX-_prevDrag.lx;collageCovers[i].transform.oy+=e.clientY-_prevDrag.ly;_prevDrag.lx=e.clientX;_prevDrag.ly=e.clientY;drawSlot(i);redrawPreview();});
-document.addEventListener('mouseup',e=>{if(!_prevDrag.active) return;const i=_prevDrag.idx;const canvas=document.getElementById(`sc-${i}`);if(canvas)canvas.style.cursor='grab';if(_slotDragStart&&collageCovers[i]?.imgEl){const dist=Math.hypot(e.clientX-_slotDragStart.x,e.clientY-_slotDragStart.y);if(dist<5)_selectSlot(i);}_slotDragStart=null;_prevDrag.active=false;});
+document.addEventListener('mouseup',e=>{if(!_prevDrag.active) return;const i=_prevDrag.idx;const canvas=document.getElementById(`sc-${i}`);if(canvas)canvas.style.cursor='grab';if(_slotDragStart&&collageCovers[i]?.imgEl){const dist=Math.hypot(e.clientX-_slotDragStart.x,e.clientY-_slotDragStart.y);if(dist<5)_selectSlot(i);else jEvent('slot_transform',{slot:i,what:'pan',title:collageCovers[i]?.title,dist:Math.round(dist)});}_slotDragStart=null;_prevDrag.active=false;});
 document.addEventListener('keydown',e=>{
   const tag=(e.target.tagName||'').toLowerCase();const typing=tag==='input'||tag==='textarea'||e.target.isContentEditable;
   if(e.key==='Escape'){
@@ -1650,8 +1661,10 @@ document.addEventListener('keydown',e=>{
   }
 });
 function drawSlot(i){const canvas=document.getElementById(`sc-${i}`);if(!canvas) return;const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#0e0e1c';ctx.fillRect(0,0,W,H);if(!collageCovers[i].imgEl) return;initT(i);const t=collageCovers[i].transform,img=collageCovers[i].imgEl;const cell=_previewCells[i];const sx=cell?W/cell.w:1,sy=cell?H/cell.h:1;const base=Math.max(W/img.naturalWidth,H/img.naturalHeight);const s=base*t.scale;ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();ctx.drawImage(img,(W-img.naturalWidth*s)/2+t.ox*sx,(H-img.naturalHeight*s)/2+t.oy*sy,img.naturalWidth*s,img.naturalHeight*s);ctx.restore();}
-function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Math.min(5,collageCovers[i].transform.scale+d));drawSlot(i);redrawPreview();}
-function clearCover(i){collageCovers[i].img=null;collageCovers[i].imgEl=null;collageCovers[i].transform=null;if(_selSlot===i){_selSlot=-1;}_updateSlotBar();renderCollageSlots();resetCanvas();}
+function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Math.min(5,collageCovers[i].transform.scale+d));drawSlot(i);redrawPreview();
+  // Схлопнуто: колесо мыши и pinch шлют это десятками раз за жест.
+  jAgg('slotzoom'+i,'slot_transform',{slot:i,what:'zoom',title:collageCovers[i]?.title},undefined,+collageCovers[i].transform.scale.toFixed(2),1200);}
+function clearCover(i){jEvent('used',{feature:'clearCover',slot:i,title:collageCovers[i]?.title});collageCovers[i].img=null;collageCovers[i].imgEl=null;collageCovers[i].transform=null;if(_selSlot===i){_selSlot=-1;}_updateSlotBar();renderCollageSlots();resetCanvas();}
 function handleCDrop(i,e){const f=e.dataTransfer?.files?.[0];if(!f||!f.type.startsWith('image/')) return;const r=new FileReader();r.onload=ev=>{collageCovers[i].img=ev.target.result;collageCovers[i].transform={ox:0,oy:0,scale:1};loadImgEl(i,ev.target.result,()=>{renderCollageSlots();previewCollage();});};r.readAsDataURL(f);}
 function loadImgEl(i,src,cb){const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{collageCovers[i].imgEl=img;if(cb)cb();};img.onerror=()=>{collageCovers[i].imgEl=null;if(cb)cb();};img.src=src;}
 function getLayout(){return document.querySelector('input[name="layout"]:checked')?.value||'2-3';}
@@ -1678,7 +1691,7 @@ function getCells(layout,n,scale){
 function hitTest(canvas,ex,ey){const rect=canvas.getBoundingClientRect();const cx=(ex-rect.left)*canvas.width/rect.width,cy=(ey-rect.top)*canvas.height/rect.height;for(let i=0;i<_previewCells.length;i++){const c=_previewCells[i];if(cx>=c.x&&cx<=c.x+c.w&&cy>=c.y&&cy<=c.y+c.h)return i;}return -1;}
 let _cpDrag={active:false,idx:-1,lx:0,ly:0,sx:0,sy:0};
 let _cpTouch={dist:0,idx:-1};
-function swapSlots(a,b){const tmp={...collageCovers[a]};collageCovers[a]={...collageCovers[b]};collageCovers[b]=tmp;if(_selSlot===a)_selSlot=b;else if(_selSlot===b)_selSlot=a;renderCollageSlots();redrawPreview();_updateSlotBar();}
+function swapSlots(a,b){jEvent('used',{feature:'swapSlots',a,b,titles:[collageCovers[a]?.title,collageCovers[b]?.title]});const tmp={...collageCovers[a]};collageCovers[a]={...collageCovers[b]};collageCovers[b]=tmp;if(_selSlot===a)_selSlot=b;else if(_selSlot===b)_selSlot=a;renderCollageSlots();redrawPreview();_updateSlotBar();}
 function _cpFinishDrag(ex,ey){if(!_cpDrag.active) return;const moved=Math.hypot(ex-_cpDrag.sx,ey-_cpDrag.sy);const j=hitTest(document.getElementById('coll-canvas'),ex,ey);if(moved>40&&j>=0&&j!==_cpDrag.idx&&collageCovers[j]?.imgEl){initT(_cpDrag.idx);collageCovers[_cpDrag.idx].transform.ox=_cpDrag.t0ox;collageCovers[_cpDrag.idx].transform.oy=_cpDrag.t0oy;swapSlots(_cpDrag.idx,j);}else if(moved<=5){drawSlot(_cpDrag.idx);}_cpDrag.active=false;}
 function attachPreview(){
   const canvas=document.getElementById('coll-canvas');if(!canvas||canvas._att) return;canvas._att=true;
@@ -1844,8 +1857,25 @@ function _renderCollageFull(cb){
 function downloadCollage(){
   showToast('Подготовка...');
   _renderCollageFull((off,failed)=>{
-    try{const a=document.createElement('a');a.download='collage.png';a.href=off.toDataURL('image/png');a.click();if(failed)showToast('⚠️ '+failed+' обл. не загрузилось — в файле заглушки');}catch(e){showToast('Ошибка: '+e.message);}
+    try{
+      const a=document.createElement('a');a.download='collage.png';a.href=off.toDataURL('image/png');a.click();
+      if(failed)showToast('⚠️ '+failed+' обл. не загрузилось — в файле заглушки');
+      _jExported=true;
+      jEvent('published',Object.assign({kind:'collage',file:'collage.png',w:off.width,h:off.height,
+        mode:_collageMode,layout:getLayout(),bgStyle:_collageBgStyle,logoShape:_logoShape,
+        failedCovers:failed||0,decisionMin:_jMinutes()},_jCollageState()));
+    }catch(e){ jError('collage_export',e.message,{w:off.width,h:off.height}); showToast('Ошибка: '+e.message); }
   });
+}
+// Состояние коллажа на момент экспорта: сколько обложек человек заменил руками и
+// сколько раз двигал/масштабировал кадры — по этому видно, годится ли автоподбор.
+function _jCollageState(){
+  try{
+    return { n:collageCovers.length,
+      titles:collageCovers.map(c=>c.title),
+      replaced:collageCovers.filter(c=>c._replaced).length,
+      moved:collageCovers.filter(c=>c.transform&&(c.transform.ox||c.transform.oy||c.transform.scale!==1)).length };
+  }catch(e){ return {}; }
 }
 // «📎 В пост»: тот же коллаж кладётся в _ccPostImg и уходит вместе с текстом одним сообщением
 // (sendPhoto). JPEG, а не PNG — base64 едет в JSON-теле запроса (лимит express 10mb), у PNG
@@ -1858,8 +1888,11 @@ function collageToPost(){
       _ccPostImg=off.toDataURL('image/jpeg',.92);
       _ccPostImgLabel=`Коллаж ${off.width}×${off.height}`;
       _renderPostImgBox();
+      _jExported=true;
+      jEvent('published',Object.assign({kind:'collage_to_post',w:off.width,h:off.height,
+        mode:_collageMode,layout:getLayout(),failedCovers:failed||0,decisionMin:_jMinutes()},_jCollageState()));
       showToast('📎 Коллаж прикреплён к посту'+(failed?` (⚠️ ${failed} обл. не загрузилось)`:''));
-    }catch(e){showToast('Ошибка: '+e.message);}
+    }catch(e){ jError('collage_to_post',e.message); showToast('Ошибка: '+e.message); }
   });
 }
 // Мультиформат: та же композиция коллажа, вписанная (contain, по центру) в фиксированный кадр
@@ -1889,7 +1922,13 @@ function downloadCollageFormat(fmt){
     _drawCollageBg(octx,f.w,f.h);
     const fit=Math.min(f.w/W,f.h/H),dw=W*fit,dh=H*fit,dx=(f.w-dw)/2,dy=(f.h-dh)/2;
     octx.drawImage(src,dx,dy,dw,dh);
-    try{const a=document.createElement('a');a.download=f.file;a.href=out.toDataURL('image/png');a.click();if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');}catch(e){showToast('Ошибка: '+e.message);}
+    try{
+      const a=document.createElement('a');a.download=f.file;a.href=out.toDataURL('image/png');a.click();
+      if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');
+      _jExported=true;
+      jEvent('published',Object.assign({kind:'collage_'+fmt,file:f.file,w:f.w,h:f.h,
+        mode:_collageMode,layout:lay,bgStyle:_collageBgStyle,failedCovers:_failed,decisionMin:_jMinutes()},_jCollageState()));
+    }catch(e){ jError('collage_export',e.message,{fmt,w:f.w,h:f.h}); showToast('Ошибка: '+e.message); }
   });
   });
 }
@@ -2499,7 +2538,8 @@ let _pickerSlot=-1;
 let _pickerTarget='story'; // 'story' | 'collage' — куда применить выбранную обложку
 // Б-3: URL обложек хранятся в массивах по вкладкам, клик идёт по индексу — URL больше не попадает в onclick-атрибут (апостроф в URL не ломает строку).
 let _pickerUrls={store:[],igdb:[],ps:[]};
-function _pickerPick(tab,i){const u=(_pickerUrls[tab]||[])[i];if(u==null)return;_pickerApply(u);}
+let _pickerSource='';   // откуда взята обложка: store/igdb/ps/file — для журнала
+function _pickerPick(tab,i){const u=(_pickerUrls[tab]||[])[i];if(u==null)return;_pickerSource=tab;_pickerApply(u);}
 let _pickerTitle='';
 function _openPicker(target,i,title){
   _pickerTarget=target;
@@ -2530,8 +2570,13 @@ function _pickerTab(tab){
 }
 function _pickerApply(url){
   if(_pickerSlot<0) return;
+  // Замена обложки руками — прямой сигнал, что автоподбор (снапшот + IGDB HD)
+  // не сработал: видно, у каких игр и через какую вкладку человек её ищет.
+  jEvent('cover_replace',{target:_pickerTarget,slot:_pickerSlot,title:_pickerTitle||null,
+    source:_pickerSource||'unknown',isData:String(url||'').startsWith('data:')});
   if(_pickerTarget==='collage'){
     if(!collageCovers[_pickerSlot]) return;
+    collageCovers[_pickerSlot]._replaced=true;
     collageCovers[_pickerSlot].img=url;
     collageCovers[_pickerSlot].transform={ox:0,oy:0,scale:1};
     loadImgEl(_pickerSlot,url,()=>{renderCollageSlots();previewCollage();});
@@ -2539,6 +2584,7 @@ function _pickerApply(url){
     return;
   }
   if(!_stG[_pickerSlot]) return;
+  _stG[_pickerSlot]._replaced=true;
   _stG[_pickerSlot].imgUrl=url;
   const img=new Image();img.crossOrigin='anonymous';
   img.onload=()=>{_stG[_pickerSlot].imgEl=img;_stBuildGameList();_stRedrawCurrent();};
@@ -2561,7 +2607,7 @@ function _pickerFilterStore(q){_pickerRenderStore(q);}
 function _pickerFromFile(inp){
   const f=inp.files[0];if(!f) return;
   const r=new FileReader();
-  r.onload=ev=>_pickerApply(ev.target.result);
+  r.onload=ev=>{_pickerSource='file';_pickerApply(ev.target.result);};
   r.readAsDataURL(f);
 }
 async function _pickerPsSearch(){
@@ -2575,6 +2621,7 @@ async function _pickerPsSearch(){
     if(r.status===401){res.innerHTML='<div style="color:#e63946;font-size:11px;padding:8px">Неверный токен</div>';return;}
     const j=await r.json();
     const candidates=(j.candidates||[]).filter(c=>c.coverUrl);
+    jEvent('used',{feature:'pickerSearch',tab:'ps',q,found:candidates.length});
     if(!candidates.length){res.innerHTML='<div style="color:var(--muted);font-size:11px;padding:8px">Не найдено</div>';return;}
     _pickerUrls.ps=[];
     res.innerHTML=candidates.map(c=>{
@@ -2582,7 +2629,7 @@ async function _pickerPsSearch(){
       const pi=_pickerUrls.ps.push(proxyUrl)-1;
       return `<div onclick="_pickerPick('ps',${pi})" title="${esc(c.name)}" style="cursor:pointer;border-radius:4px;overflow:hidden;background:var(--bg)"><img src="${esc(proxyUrl)}" style="width:100%;aspect-ratio:3/4;object-fit:cover;display:block" loading="lazy" onerror="this.parentNode.style.display='none'"><div style="font-size:9px;color:var(--muted);padding:2px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(c.name)}</div></div>`;
     }).join('');
-  }catch(e){res.innerHTML='<div style="color:#e63946;font-size:11px;padding:8px">Ошибка: '+e.message+'</div>';}
+  }catch(e){jError('picker_ps',e.message,{q});res.innerHTML='<div style="color:#e63946;font-size:11px;padding:8px">Ошибка: '+e.message+'</div>';}
 }
 async function _pickerIgdbSearch(){
   const q=document.getElementById('cc-igdb-q').value.trim();if(!q) return;
@@ -2591,6 +2638,7 @@ async function _pickerIgdbSearch(){
   try{
     const r=await fetch(`${API}/igdb/cover?name=${encodeURIComponent(q)}`);
     const j=await r.json();
+    jEvent('used',{feature:'pickerSearch',tab:'igdb',q,found:(j&&j.cover)?1:0,confidence:(j&&j.confidence)||null,matched:(j&&j.matched)||null});
     if(j&&j.cover){
       const hdUrl=`${API}/igdb/img?url=${encodeURIComponent(j.cover.replace(/\/t_[a-z0-9_]+\//,'/t_1080p/'))}`;
       _pickerUrls.igdb=[hdUrl];
@@ -2598,7 +2646,7 @@ async function _pickerIgdbSearch(){
     } else {
       res.innerHTML='<div style="color:var(--muted);font-size:11px;padding:8px">Не найдено</div>';
     }
-  }catch(e){res.innerHTML='<div style="color:#e63946;font-size:11px;padding:8px">Ошибка: '+e.message+'</div>';}
+  }catch(e){jError('picker_igdb',e.message,{q});res.innerHTML='<div style="color:#e63946;font-size:11px;padding:8px">Ошибка: '+e.message+'</div>';}
 }
 
 function _stInitCanvas(){_stCanvas.width=720;_stCanvas.height=1280;}
