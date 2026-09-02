@@ -384,7 +384,7 @@
           <button class="bf sec" id="st-gen-cap-btn" onclick="_stGenCaption()">📝 Текст к сторис (TG)</button>
           <div id="st-cap-out" class="opanel" style="display:none;margin-top:8px">
             <div class="ot">ТЕКСТ К СТОРИС:</div>
-            <textarea id="st-cap-text" rows="7" oninput="_stCapText=this.value" title="Текст сгенерирован ИИ, но правится вручную — копируется то, что видишь" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;line-height:1.45;padding:8px;resize:vertical;font-family:inherit;outline:none"></textarea>
+            <textarea id="st-cap-text" rows="7" oninput="_stCapText=this.value;_jStCapTouched()" title="Текст сгенерирован ИИ, но правится вручную — копируется то, что видишь" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;line-height:1.45;padding:8px;resize:vertical;font-family:inherit;outline:none"></textarea>
             <div class="bf2" style="margin-top:6px"><button class="bf grn" onclick="_stCopyCap()">📋 Копировать</button></div>
           </div>
         </div>
@@ -1965,6 +1965,12 @@ function _drawLogoBox(ctx,img,x,y,size,shape){
   ctx.restore();
 }
 let _stShortDescs={};
+// Версии ИИ ДО правки человека. _stEditDesc пишет правку в тот же _stShortDescs,
+// поэтому без отдельного снимка предложение модели исчезает с первым же символом —
+// ловушка «логировать до перезаписи» из скилла, живая прямо здесь.
+let _stShortDescsAI={};
+let _stCapBot='';
+let _jTplSwitches=0;   // сколько раз перебирали шаблоны до экспорта
 let _stCapText='';
 let _stTplId=localStorage.getItem('cc_tpl_id')||'cards';
 let _stBgStyle=localStorage.getItem('cc_st_bg_style')||'dark';
@@ -1986,6 +1992,7 @@ const _ST_BG={image:{colors:null},dark:{colors:['#1a1a2e','#0e0e1c']},light:{col
 
 // ── Story Mode & Template ─────────────────────────────────
 function _stSetMode(mode){
+  if(_stMode!==mode)jEvent('used',{feature:'storyMode',from:_stMode,to:mode,els:_stEls.length});
   _stMode=mode;
   document.getElementById('st-mode-templates').style.background=mode==='templates'?'var(--blue)':'transparent';
   document.getElementById('st-mode-templates').style.color=mode==='templates'?'#fff':'var(--muted)';
@@ -1998,6 +2005,7 @@ function _stSetMode(mode){
   else {_stRender();_stRenderSidebar();} // список элементов и свойства должны быть актуальны сразу при входе в редактор
 }
 function _stSetPlatform(p){
+  if(_stPlatform!==p)jEvent('used',{feature:'storyPlatform',from:_stPlatform,to:p});
   _stPlatform=p;
   document.getElementById('st-plat-tg').style.background=p==='tg'?'var(--blue)':'transparent';
   document.getElementById('st-plat-tg').style.color=p==='tg'?'#fff':'var(--muted)';
@@ -2007,6 +2015,7 @@ function _stSetPlatform(p){
   _stRenderTemplate();
 }
 function _stSetCardStyle(s){
+  if(_stCardStyle!==s)jEvent('used',{feature:'cardStyle',from:_stCardStyle,to:s});
   _stCardStyle=s;
   ['dark','gradient','minimal'].forEach(k=>{
     const b=document.getElementById('st-card-'+k);if(!b) return;
@@ -2018,6 +2027,7 @@ function _stSetCardStyle(s){
 }
 // ── BG Style (Stories) ────────────────────────────────────
 function _stSetBgStyle(s){
+  if(_stBgStyle!==s)jEvent('used',{feature:'storyBgStyle',from:_stBgStyle,to:s});
   _stBgStyle=s;localStorage.setItem('cc_st_bg_style',s);
   ['dark','blur','glow','grain'].forEach(k=>{const b=document.getElementById('st-bg-'+k);if(!b)return;const on=k===s;b.style.border='1px solid '+(on?'var(--blue)':'var(--border)');b.style.background=on?'rgba(0,112,209,.2)':'var(--card)';b.style.color=on?'var(--blue)':'var(--muted)';});
   _stRenderTemplate();
@@ -2130,10 +2140,16 @@ function _stSaveLogoUrl(v){
   const img=new Image();if(!_stLogoUrl.startsWith('data:'))img.crossOrigin='anonymous';
   img.onload=()=>{_stLogoImg=img;_stRenderTemplate();};img.onerror=()=>{_stLogoImg=null;_stRenderTemplate();};img.src=_stLogoUrl;
 }
-function _stSetLogoPosOpt(v){_stLogoPos=v;localStorage.setItem('cc_logo_pos',v);_stRenderTemplate();}
+function _stSetLogoPosOpt(v){jEvent('used',{feature:'logoPos',from:_stLogoPos,to:v});_stLogoPos=v;localStorage.setItem('cc_logo_pos',v);_stRenderTemplate();}
+// Смена шаблона вынесена из инлайн-onclick в функцию: перебор шаблонов до экспорта —
+// это и есть ответ на «какие шаблоны рабочие, а какие нарисованы зря».
+function _stSetTpl(id){
+  jEvent('tpl_switch',{from:_stTplId,to:id,seq:++_jTplSwitches});
+  _stTplId=id;localStorage.setItem('cc_tpl_id',id);_stUpdateTplBtns();_stRenderTemplate();
+}
 function _stUpdateTplBtns(){
   const cont=document.getElementById('st-tpl-btns');if(!cont)return;
-  cont.innerHTML=_ST_TPLS.map(t=>`<button onclick="_stTplId='${t.id}';localStorage.setItem('cc_tpl_id','${t.id}');_stUpdateTplBtns();_stRenderTemplate()" style="padding:5px 10px;border-radius:5px;border:1px solid ${_stTplId===t.id?'var(--blue)':'var(--border)'};background:${_stTplId===t.id?'rgba(0,112,209,.2)':'var(--card)'};color:${_stTplId===t.id?'var(--blue)':'var(--muted)'};font-size:11px;cursor:pointer;transition:.2s">${t.label}</button>`).join('');
+  cont.innerHTML=_ST_TPLS.map(t=>`<button onclick="_stSetTpl('${t.id}')" style="padding:5px 10px;border-radius:5px;border:1px solid ${_stTplId===t.id?'var(--blue)':'var(--border)'};background:${_stTplId===t.id?'rgba(0,112,209,.2)':'var(--card)'};color:${_stTplId===t.id?'var(--blue)':'var(--muted)'};font-size:11px;cursor:pointer;transition:.2s">${t.label}</button>`).join('');
 }
 
 // ── Template Helpers ──────────────────────────────────────
@@ -2217,8 +2233,23 @@ function _stDescTargetGame(){
 function _stEditDesc(v){
   const g=_stDescTargetGame();if(!g)return;
   if(v.trim())_stShortDescs[g.title]=v; else delete _stShortDescs[g.title];
+  // Правка описания на картинке. Схлопнута по игре: поле шлёт oninput на каждую
+  // букву, а в журнале нужна законченная фраза рядом с версией модели.
+  jAgg('desc:'+g.title,'edited',{mode:'story_desc',title:g.title,
+    botBefore:_stShortDescsAI[g.title]||null,edited:v,
+    editSharePct:jShare(_stShortDescsAI[g.title]||'',v),
+    fromAI:!!_stShortDescsAI[g.title]},undefined,undefined,1500);
   _stRenderTemplate();
 }
+// Правка «Текста к сторис» — то же самое для textarea подписи.
+function _jStCapTouched(){
+  if(!_stCapBot) return; // текст набран руками, без генерации — сравнивать не с чем
+  jAgg('cap','edited',{mode:'story_caption',botBefore:_stCapBot,edited:_stCapText,
+    editSharePct:jShare(_stCapBot,_stCapText)},undefined,undefined,1500);
+}
+// Немедленный сброс отложенной правки — перед копированием/экспортом, чтобы
+// событие edited встало в журнал ДО published, а не после.
+function _jStCapEdited(){ try{ _jAggFlushAll(); }catch(e){} }
 function _stSyncDescEdit(force){
   const ta=document.getElementById('st-desc-edit');if(!ta)return;
   if(!force&&document.activeElement===ta)return; // не перебиваем то, что человек печатает прямо сейчас
@@ -2447,6 +2478,7 @@ function _stTemplateToEditor(){
     const lx=_stLogoPos==='tr'?STORY_W-lSize-p:p;
     _stEls.push({type:'logo',x:lx,y:p,w:lSize,h:lSize,logoUrl:_stLogoUrl,imgEl:_stLogoImg,opacity:1});
   }
+  jEvent('used',{feature:'templateToEditor',tpl:_stTplId,els:_stEls.length,gameCount:_stGameCount});
   _stSetMode('editor');
 }
 
@@ -2468,9 +2500,16 @@ async function _stGenShortDescs(){
     const text=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed=JSON.parse(text);
     Object.entries(parsed).forEach(([idx,d])=>{const g=needed[parseInt(idx,10)-1];if(g&&typeof d==='string'&&d.trim())_stShortDescs[g.title]=d.trim();});
+    // Снимок версии модели ДО правок: _stEditDesc пишет прямо в _stShortDescs.
+    const got={},lost=[];
+    needed.forEach(g=>{ if(_stShortDescs[g.title]){ got[g.title]=_stShortDescs[g.title]; _stShortDescsAI[g.title]=_stShortDescs[g.title]; } else lost.push(g.title); });
+    _jAiPasses++;
+    jEvent('generated',{mode:'story_desc',model:descModel,tpl:_stTplId,
+      titles:needed.map(g=>g.title),bot:JSON.stringify(got),lost:lost.length,lostTitles:lost,
+      withDesc:needed.filter(g=>g.description).length,aiPasses:_jAiPasses});
     _stRenderTemplate();
     showToast('✅ Описания готовы');
-  }catch(e){showToast('Ошибка: '+e.message);}
+  }catch(e){jError('story_desc_gen',e.message,{model:descModel,titles:needed.map(g=>g.title)});showToast('Ошибка: '+e.message);}
   finally{if(btn)btn.disabled=false;if(prog)prog.style.display='none';}
 }
 
@@ -2490,18 +2529,27 @@ async function _stGenCaption(){
       if(!resp.ok) throw new Error('HTTP '+resp.status);
       const data=await resp.json();
       const text=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-      try{const p=JSON.parse(text);Object.entries(p).forEach(([idx,d])=>{const g=missing[parseInt(idx,10)-1];if(g&&d)genDescs[g.title]=(typeof d==='string'?d.trim():d);});}catch(_){}
+      try{const p=JSON.parse(text);Object.entries(p).forEach(([idx,d])=>{const g=missing[parseInt(idx,10)-1];if(g&&d)genDescs[g.title]=(typeof d==='string'?d.trim():d);});}
+      catch(e){ jError('story_caption_json',e&&e.message,{model:descModel,raw:text,titles:missing.map(g=>g.title)}); }
     }
     const lines=sel.map(g=>{const desc=g.description||genDescs[g.title]||'';const price=g.priceRUB?` — ${g.priceRUB.toLocaleString('ru')} руб.`:'';return `${pickEmoji({title:g.title,description:desc})} ${g.title}${price}\n${desc}`.trim();});
     _stCapText=lines.join('\n\n');
+    _stCapBot=_stCapText; // снимок ДО правок: поле редактируемое, правка затирает версию модели
+    _jAiPasses++;
+    jEvent('generated',{mode:'story_caption',model:descModel,platform:_stPlatform,tpl:_stTplId,
+      bot:_stCapText,n:sel.length,titles:sel.map(g=>g.title),
+      aiNew:Object.keys(genDescs).length,fromArchive:sel.length-missing.length,aiPasses:_jAiPasses});
     document.getElementById('st-cap-text').value=_stCapText; // поле редактируемое: правки уезжают в _stCapText через oninput
     document.getElementById('st-cap-out').style.display='';
     showToast('✅ Текст готов');
-  }catch(e){showToast('Ошибка: '+e.message);}
+  }catch(e){jError('story_caption_gen',e.message,{model:descModel,n:sel.length});showToast('Ошибка: '+e.message);}
   finally{if(btn)btn.disabled=false;}
 }
 function _stCopyCap(){
   if(!_stCapText){showToast('Сначала сгенерируй');return;}
+  _jStCapEdited();
+  jEvent('published',{kind:'copy',mode:'story_caption',final:_stCapText,len:_stCapText.length,
+    editSharePct:_stCapBot?jShare(_stCapBot,_stCapText):null,aiPasses:_jAiPasses,decisionMin:_jMinutes()});
   navigator.clipboard.writeText(_stCapText).then(()=>showToast('📋 Скопировано!')).catch(()=>{const x=document.createElement('textarea');x.value=_stCapText;document.body.appendChild(x);x.select();document.execCommand('copy');document.body.removeChild(x);showToast('📋 Скопировано!');});
 }
 function openStory(){
@@ -2511,6 +2559,11 @@ function openStory(){
   const sel=all.slice(0,5);
   _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
   _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
+  _stShortDescsAI={};_stCapBot='';_jTplSwitches=0;
+  jChainNew('story');
+  jEvent('used',Object.assign({feature:'openStory',tpl:_stTplId,mode:_stMode,platform:_stPlatform,
+    cardStyle:_stCardStyle,bgStyle:_stBgStyle,logoPos:_stLogoPos,logoShape:_logoShape,
+    dropped:all.length-sel.length},jSelSnapshot(sel)));
   document.getElementById('story-modal').classList.add('open');
   _stCanvas=document.getElementById('st-canvas');_stCtx=_stCanvas.getContext('2d');
   _stInitCanvas();_stLoadImgs();_stBuildGameList();
@@ -2529,7 +2582,11 @@ function openStory(){
   if(_stMode==='editor')_stRenderSidebar();
   document.fonts.ready.then(()=>{if(document.getElementById('story-modal').classList.contains('open'))_stRedrawCurrent();});
 }
-function closeStory(){document.getElementById('story-modal').classList.remove('open');}
+function closeStory(){
+  _jAggFlushAll();
+  if(_jChainKind==='story'&&!_jExported)jEvent('rejected',Object.assign({kind:'story',reason:'closed',decisionMin:_jMinutes()},_jStoryState()));
+  jFlush();
+  document.getElementById('story-modal').classList.remove('open');}
 // Фоновый HD-апгрейд одного слота (один IGDB-запрос на игру, guard от повтора). Замыкаемся на объект g, а не на индекс — переживает reorder.
 function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
 
@@ -2692,16 +2749,19 @@ function _stOnTouchStart(e){e.preventDefault();if(e.touches.length===1){_stPinch
 function _stOnTouchMove(e){e.preventDefault();if(e.touches.length===2&&_stPinch.active){const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);const g=_stG[_stPinch.slotIdx];if(g&&g.imgEl){g.transform.scale=Math.max(0.3,Math.min(4,g.transform.scale+(dist-_stPinch.dist)/200));_stRedrawCurrent();}_stPinch.dist=dist;}else if(e.touches.length===1){_stOnMouseMove(e.touches[0]);}}
 function _stOnTouchEnd(){_stPinch.active=false;_stOnMouseUp();}
 function _stSnapshot(){_stUndoStack.push({els:_stEls.map(el=>({...el})),sel:_stSel});if(_stUndoStack.length>30)_stUndoStack.shift();}
-function stUndo(){if(!_stUndoStack.length){showToast('Нечего отменять');return;}const snap=_stUndoStack.pop();_stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();}
-function stAddOverlay(){_stSnapshot();_stEls.push({type:'overlay',x:80,y:1400,w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddPrice(){_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stEls.push({type:'price',x:340,y:Math.round(si*slotH+slotH*0.7),w:400,h:110,text:g&&g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddSticker(){_stSnapshot();_stEls.push({type:'sticker',x:60,y:60,w:360,h:100,text:'СКИДКА',fontSize:58,shape:'pill',color:'#ffffff',bgColor:'#e63946',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddLogo(){_stSnapshot();_stEls.push({type:'logo',x:40,y:40,w:280,h:100,logoUrl:'',imgEl:null,opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+// Ctrl+Z — сильнейший сигнал «сделал не то»: по паре (что добавили → сразу undo)
+// видно, какие элементы и дефолты промахиваются.
+function stUndo(){if(!_stUndoStack.length){showToast('Нечего отменять');return;}const snap=_stUndoStack.pop();jEvent('undo',{els:_stEls.length,selType:_stSel>=0&&_stEls[_stSel]?_stEls[_stSel].type:null,depth:_stUndoStack.length});_stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();}
+function stAddOverlay(){jEvent('el_add',{type:'overlay',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'overlay',x:80,y:1400,w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+function stAddPrice(){jEvent('el_add',{type:'price',tpl:_stTplId,els:_stEls.length});_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stEls.push({type:'price',x:340,y:Math.round(si*slotH+slotH*0.7),w:400,h:110,text:g&&g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+function stAddSticker(){jEvent('el_add',{type:'sticker',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'sticker',x:60,y:60,w:360,h:100,text:'СКИДКА',fontSize:58,shape:'pill',color:'#ffffff',bgColor:'#e63946',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+function stAddLogo(){jEvent('el_add',{type:'logo',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'logo',x:40,y:40,w:280,h:100,logoUrl:'',imgEl:null,opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
 // QR-код на ?game=<id> активного слота — ведёт на карточку игры на сайте. api.qrserver.com не отдаёт
 // CORS-заголовки для <img>, поэтому URL заворачиваем через тот же VPS-прокси /igdb/img, что и обложки.
 function stAddQR(){
   const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];
-  if(!g||g.id==null){showToast('У этой игры нет id для ссылки');return;}
+  if(!g||g.id==null){jEvent('rejected',{kind:'qr',reason:'no_id',title:g?g.title:null,custom:!!(g&&g.custom)});showToast('У этой игры нет id для ссылки');return;}
+  jEvent('el_add',{type:'qr',tpl:_stTplId,els:_stEls.length,title:g.title});
   _stSnapshot();
   const gameUrl=`https://poigraem.shop/?game=${g.id}`;
   const qrSrc=_safeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=6&data=${encodeURIComponent(gameUrl)}`);
@@ -2713,13 +2773,13 @@ function stAddQR(){
   img.src=qrSrc;
   _stRender();_stRenderSidebar();
 }
-function stDeleteSel(){if(_stSel<0) return;_stSnapshot();_stEls.splice(_stSel,1);_stSel=-1;_stRender();_stRenderSidebar();}
-function stDuplicateSel(){if(_stSel<0) return;_stSnapshot();_stEls.push(Object.assign({},_stEls[_stSel],{x:_stEls[_stSel].x+30,y:_stEls[_stSel].y+30}));_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stMoveUp(){if(_stSel<0||_stSel>=_stEls.length-1) return;_stSnapshot();[_stEls[_stSel],_stEls[_stSel+1]]=[_stEls[_stSel+1],_stEls[_stSel]];_stSel++;_stRender();_stRenderSidebar();}
-function stMoveDown(){if(_stSel<=0) return;_stSnapshot();[_stEls[_stSel],_stEls[_stSel-1]]=[_stEls[_stSel-1],_stEls[_stSel]];_stSel--;_stRender();_stRenderSidebar();}
-function stSetGameCount(n){_stGameCount=Math.min(n,_stG.length);_stBuildGameList();_stRedrawCurrent();}
-function stReorderGame(i,dir){const j=i+dir;if(j<0||j>=_stG.length) return;[_stG[i],_stG[j]]=[_stG[j],_stG[i]];for(let k=0;k<Math.min(_stG.length,3);k++)_stUpgradeSlotHD(k);_stBuildGameList();_stRedrawCurrent();}
-function stSetSlotBg(i,bg){if(!_stG[i]) return;_stG[i].bg=bg;_stBuildGameList();_stRender();}
+function stDeleteSel(){if(_stSel<0) return;jEvent('el_delete',{type:_stEls[_stSel]?_stEls[_stSel].type:null,els:_stEls.length});_stSnapshot();_stEls.splice(_stSel,1);_stSel=-1;_stRender();_stRenderSidebar();}
+function stDuplicateSel(){if(_stSel<0) return;jEvent('el_dup',{type:_stEls[_stSel]?_stEls[_stSel].type:null,els:_stEls.length});_stSnapshot();_stEls.push(Object.assign({},_stEls[_stSel],{x:_stEls[_stSel].x+30,y:_stEls[_stSel].y+30}));_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+function stMoveUp(){if(_stSel<0||_stSel>=_stEls.length-1) return;jEvent('el_layer',{type:_stEls[_stSel]?.type,dir:'up'});_stSnapshot();[_stEls[_stSel],_stEls[_stSel+1]]=[_stEls[_stSel+1],_stEls[_stSel]];_stSel++;_stRender();_stRenderSidebar();}
+function stMoveDown(){if(_stSel<=0) return;jEvent('el_layer',{type:_stEls[_stSel]?.type,dir:'down'});_stSnapshot();[_stEls[_stSel],_stEls[_stSel-1]]=[_stEls[_stSel-1],_stEls[_stSel]];_stSel--;_stRender();_stRenderSidebar();}
+function stSetGameCount(n){jEvent('used',{feature:'storyGameCount',from:_stGameCount,to:Math.min(n,_stG.length),tpl:_stTplId});_stGameCount=Math.min(n,_stG.length);_stBuildGameList();_stRedrawCurrent();}
+function stReorderGame(i,dir){const j=i+dir;if(j<0||j>=_stG.length) return;jEvent('used',{feature:'storyReorder',i,dir,title:_stG[i]?.title});[_stG[i],_stG[j]]=[_stG[j],_stG[i]];for(let k=0;k<Math.min(_stG.length,3);k++)_stUpgradeSlotHD(k);_stBuildGameList();_stRedrawCurrent();}
+function stSetSlotBg(i,bg){if(!_stG[i]) return;jEvent('used',{feature:'slotBg',slot:i,from:_stG[i].bg||'image',to:bg,title:_stG[i].title});_stG[i].bg=bg;_stBuildGameList();_stRender();}
 function _stBuildGameList(){
   const el=document.getElementById('st-game-list');if(!el) return;
   document.querySelectorAll('.st-gc-btn').forEach((b,i)=>{const active=(i+1)===_stGameCount;const avail=(i+1)<=_stG.length;b.style.background=active?'var(--blue)':'transparent';b.style.color=active?'#fff':avail?'var(--muted)':'var(--border)';b.disabled=!avail;});
@@ -2759,10 +2819,21 @@ function _stRenderSidebar(){
   el.innerHTML=html;
 }
 function _stHexColor(c){if(!c||c.startsWith('rgba')||c.startsWith('rgb')) return '#000000';return c;}
-function _stProp(k,v){if(_stSel<0) return;_stEls[_stSel][k]=v;_stRender();if(k==='text')_stRenderLayers();}
-function _stPropN(k,v){if(_stSel<0) return;_stEls[_stSel][k]=parseFloat(v);_stRender();}
-function _stPropBg(v){if(_stSel<0) return;_stEls[_stSel].bgColor=v;_stRender();}
-function _stBgColor(hex){if(_stSel<0) return;_stEls[_stSel].bgColor=hex;const inp=document.querySelector('#st-props input[type="text"][oninput="_stPropBg(this.value)"]');if(inp)inp.value=hex;_stRender();}
+// Микроправки свойств. Ползунок прозрачности и поле размера шлют oninput на каждый
+// шаг, поэтому пишем схлопнутым: одно событие «fontSize у price менялся 14 раз,
+// 68 → 52». Именно эти пары и отвечают на «что я переделываю постоянно»: если
+// дефолт правят почти всегда — надо менять дефолт, а не руки.
+function _jProp(k,v){
+  try{
+    if(_stSel<0||!_stEls[_stSel])return;
+    const t=_stEls[_stSel].type;
+    jAgg('prop:'+_stSel+':'+k,'prop_change',{elType:t,key:k,tpl:_stTplId},_stEls[_stSel][k],v,900);
+  }catch(e){}
+}
+function _stProp(k,v){if(_stSel<0) return;_jProp(k,v);_stEls[_stSel][k]=v;_stRender();if(k==='text')_stRenderLayers();}
+function _stPropN(k,v){if(_stSel<0) return;_jProp(k,parseFloat(v));_stEls[_stSel][k]=parseFloat(v);_stRender();}
+function _stPropBg(v){if(_stSel<0) return;_jProp('bgColor',v);_stEls[_stSel].bgColor=v;_stRender();}
+function _stBgColor(hex){if(_stSel<0) return;_jProp('bgColor',hex);_stEls[_stSel].bgColor=hex;const inp=document.querySelector('#st-props input[type="text"][oninput="_stPropBg(this.value)"]');if(inp)inp.value=hex;_stRender();}
 function _stSetLogoUrl(url){if(_stSel<0) return;const el=_stEls[_stSel];if(el.type!=='logo') return;el.logoUrl=url;if(url){const img=new Image();img.onload=()=>{el.imgEl=img;_stRender();};img.onerror=()=>{el.imgEl=null;_stRender();};img.src=url;}else{el.imgEl=null;_stRender();}}
 // ── NEW Template: Горизонт ────────────────────────────────
 function _stTplHorizon(){
@@ -2855,9 +2926,39 @@ function downloadStory(){
     _stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel;
     _stG.forEach((g,i)=>g.imgEl=origG[i]);_stEls.forEach((el,i)=>el.imgEl=origEls[i]);
     _stRedrawCurrent();
-    try{const a=document.createElement('a');a.href=off.toDataURL('image/png');a.download='story.png';a.click();if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');}catch(err){showToast('Ошибка: '+err.message);}
+    try{
+      const a=document.createElement('a');a.href=off.toDataURL('image/png');a.download='story.png';a.click();
+      if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');
+      _jExported=true;
+      _jAggFlushAll(); // отложенные правки описаний — в журнал ДО published
+      jEvent('published',Object.assign({kind:'story',file:'story.png',w:STORY_W,h:STORY_H,
+        failedCovers:_failed,decisionMin:_jMinutes()},_jStoryState()));
+    }catch(err){ jError('story_export',err.message); showToast('Ошибка: '+err.message); }
   });
   });
+}
+// Состояние сторис на момент экспорта: по нему постфактум видно, какие шаблоны и
+// стили реально доходят до файла, сколько раз шаблон перебирали, какие элементы
+// добавлены руками и насколько переписаны описания от ИИ.
+function _jStoryState(){
+  try{
+    const n=Math.min(_stGameCount,_stG.length);
+    const shown=_stG.slice(0,n);
+    const shares=shown.map(g=>_stShortDescsAI[g.title]!==undefined?jShare(_stShortDescsAI[g.title],_stShortDescs[g.title]||''):null).filter(x=>x!==null);
+    return {
+      tpl:_stTplId,mode:_stMode,platform:_stPlatform,cardStyle:_stCardStyle,bgStyle:_stBgStyle,
+      logoPos:_stLogoPos,logoShape:_logoShape,descOn:_stDescOn,
+      gameCount:n,titles:shown.map(g=>g.title),
+      slotBgs:shown.map(g=>g.bg||'image'),
+      replacedCovers:_stG.filter(g=>g._replaced).length,
+      movedCovers:shown.filter(g=>g.transform&&(g.transform.ox||g.transform.oy||g.transform.scale!==1)).length,
+      els:_stEls.length,elTypes:_stEls.map(e=>e.type),
+      tplSwitches:_jTplSwitches,undoDepth:_stUndoStack.length,
+      aiDescs:Object.keys(_stShortDescsAI).length,
+      descEditSharePct:shares.length?Math.round(shares.reduce((a,b)=>a+b,0)/shares.length):null,
+      aiPasses:_jAiPasses
+    };
+  }catch(e){ return {tpl:_stTplId}; }
 }
 function _slugify(s){return (s||'story').toLowerCase().replace(/[^a-zа-яё0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,40)||'story';}
 // Батч: одна сторис на каждую выбранную игру (текущий шаблон/стиль/лого), последовательные скачивания.
@@ -2907,6 +3008,13 @@ async function downloadStoryBatch(){
   _stG=prevG;_stGameCount=prevCount;_stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel;
   _stRedrawCurrent();
   if(btn)btn.disabled=false;
+  _jExported=true;
+  // Одно событие на весь батч, а не по событию на игру: цикл по 15 играм — ровно
+  // тот случай, из-за которого ~/catalog-journal раздулся до 17 тыс. строк.
+  jEvent('published',{kind:'story_batch',n:list.length,ok,fail,capped:all.length>BATCH_CAP,
+    titles:list.map(g=>_displayTitle(g.title)),tpl:_stTplId,platform:_stPlatform,
+    cardStyle:_stCardStyle,bgStyle:_stBgStyle,logoPos:_stLogoPos,logoShape:_logoShape,
+    decisionMin:_jMinutes()});
   showToast(`✅ Сторис готовы: ${ok}`+(fail?`, ошибок: ${fail}`:'')+(all.length>BATCH_CAP?` (взяты первые ${BATCH_CAP})`:''));
 }
 
