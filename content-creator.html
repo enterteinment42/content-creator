@@ -556,6 +556,233 @@ let _sortKey = null;    // 'price' | 'discount' | null
 let _sortDir = 1;
 let _onlySelected = false;
 
+// ═══ ЖУРНАЛ САМООБУЧЕНИЯ ═══════════════════════════════════════════════════
+// Методика — скилл bot-selflearn-log: сырьё пишем в рантайме, смысл извлекаем
+// постфактум. Приёмник — POST /cc/journal (poigraem/backend/server.js), свой
+// каталог ~/cc-journal на VPS, ретеншн 6 месяцев.
+//
+// Почему сервер, а не localStorage: инструмент открывают и с телефона, и с
+// десктопа — это два РАЗНЫХ localStorage, свести их нельзя. Ровно на этом
+// каталог магазина потерял два месяца истории (31.08.2026).
+//
+// Клиент — перенос обкатанного poigraem/js/journal.js с двумя добавками:
+//  • device/w в каждом событии: без них не отличить телефон от десктопа, а три
+//    последние сессии инструмента были ровно про мобильные грабли;
+//  • схлопывание микроправок (_jAgg): ползунок шлёт oninput десятками в секунду.
+//    Без этого получится второй ~/catalog-journal, где 17 тыс. событий из цикла
+//    массового импорта похоронили всё, ради чего журнал заводили.
+//
+// Железные правила: (1) журнал не имеет права уронить инструмент — каждая точка
+// входа в try/catch, возврата нет; (2) пишем то, чего потом не восстановить —
+// версию ИИ ДО правки человека; (3) одна работа над артефактом = один chainId.
+const J_URL          = API + '/cc/journal';
+const J_BUF_KEY      = 'cc_journal_buf';
+const J_BUF_MAX      = 300;      // сверх этого вытесняем самые старые
+const J_FLUSH_AT     = 20;       // накопили столько — отправляем
+const J_FLUSH_MS     = 60000;    // либо раз в минуту, если что-то лежит
+const J_BATCH_MAX    = 200;      // за один запрос (сервер режет на 500)
+const J_FIELD_MAX    = 8000;     // длина строкового поля; выше — обрезаем с пометкой
+const J_KEEPALIVE_B  = 48 * 1024; // тело keepalive-fetch ограничено 64 КБ на всё окно выгрузки
+let _jSending = false, _jTimer = null;
+let _jChain = null, _jChainKind = '', _jChainAt = 0; // текущая работа над артефактом
+let _jAiPasses = 0;      // сколько заходов генерации в этой цепочке
+let _jExported = false;  // дошло ли дело до экспорта/отправки
+
+// base64 (логотип 218 КБ, фото товаров, PNG-экспорты) в журнал не тащим.
+function _jTrim(v){
+  if(typeof v !== 'string' || v.length <= J_FIELD_MAX) return v;
+  if(v.startsWith('data:')) return `base64 (${Math.round(v.length/1024)} КБ)`;
+  return v.slice(0, J_FIELD_MAX) + `…[обрезано ${v.length - J_FIELD_MAX}]`;
+}
+function _jRead(){
+  try { const a = JSON.parse(localStorage.getItem(J_BUF_KEY) || '[]'); return Array.isArray(a) ? a : []; }
+  catch(e){ return []; }
+}
+function _jWrite(buf){
+  try { localStorage.setItem(J_BUF_KEY, JSON.stringify(buf)); }
+  catch(e){
+    // Переполнение localStorage: журнал уступает место рабочим данным инструмента
+    // (свои товары, пресеты бренда), а не наоборот — режем буфер вдвое.
+    try { localStorage.setItem(J_BUF_KEY, JSON.stringify(buf.slice(-Math.floor(buf.length/2)))); }
+    catch(e2){ console.warn('[journal] буфер не сохранён:', e2.message); }
+  }
+}
+// Устройство — как в shop-journal: телефон отличаем по ширине и наличию касаний.
+function _jDevice(){
+  try {
+    const w = window.innerWidth || 0;
+    const touch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+    return { device: (w <= 640 || (touch && w <= 900)) ? 'mobile' : 'desktop', w };
+  } catch(e){ return { device: 'unknown', w: 0 }; }
+}
+// Новая цепочка: одна работа над одним артефактом (пост / коллаж / сторис).
+function jChainNew(kind){
+  try {
+    _jChain = kind + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
+    _jChainKind = kind; _jChainAt = Date.now(); _jAiPasses = 0; _jExported = false;
+  } catch(e){}
+  return _jChain;
+}
+function _jMinutes(){ return _jChainAt ? +((Date.now() - _jChainAt) / 60000).toFixed(1) : null; }
+
+// Главная точка входа. event — имя из общей таксономии скилла (generated / edited /
+// published / rejected / error / used), поля — доменные.
+function jEvent(event, fields){
+  try {
+    const d = _jDevice();
+    const e = { ts: new Date().toISOString(), event, chainId: _jChain, kind: _jChainKind || null, device: d.device, w: d.w };
+    if(fields) for(const k of Object.keys(fields)){
+      if(fields[k] !== undefined) e[k] = _jTrim(fields[k]);
+    }
+    const buf = _jRead();
+    buf.push(e);
+    const over = buf.length - J_BUF_MAX;
+    if(over > 0) buf.splice(0, over);
+    _jWrite(buf);
+    if(buf.length >= J_FLUSH_AT) jFlush();
+    else _jArm();
+  } catch(err){ console.warn('[journal]', err && err.message); }
+}
+function jError(stage, message, extra){
+  jEvent('error', Object.assign({ stage, message: String(message || '') }, extra || {}));
+}
+function _jArm(){
+  if(_jTimer) return;
+  _jTimer = setTimeout(() => { _jTimer = null; jFlush(); }, J_FLUSH_MS);
+}
+
+// Схлопывание микроправок: ползунок шрифта шлёт oninput на каждый пиксель.
+// Копим первое «до» и последнее «после» по ключу, отправляем одним событием
+// после паузы — в журнал попадает «fontSize менялся 14 раз, 52 → 68», а не 14 строк.
+const _jAggMap = {}; // key -> {ev, fields, from, n, timer}
+function jAgg(key, event, fields, fromVal, toVal, delay){
+  try {
+    let a = _jAggMap[key];
+    if(!a){ a = _jAggMap[key] = { ev: event, fields, from: fromVal, n: 0, timer: null }; }
+    a.ev = event; a.fields = fields; a.to = toVal; a.n++;
+    if(a.timer) clearTimeout(a.timer);
+    a.timer = setTimeout(() => {
+      const cur = _jAggMap[key]; delete _jAggMap[key];
+      if(!cur) return;
+      jEvent(cur.ev, Object.assign({}, cur.fields, { from: cur.from, to: cur.to, n: cur.n }));
+    }, delay || 900);
+  } catch(e){}
+}
+function _jAggFlushAll(){
+  try {
+    for(const key of Object.keys(_jAggMap)){
+      const a = _jAggMap[key]; if(a && a.timer) clearTimeout(a.timer);
+      delete _jAggMap[key];
+      if(a) jEvent(a.ev, Object.assign({}, a.fields, { from: a.from, to: a.to, n: a.n }));
+    }
+  } catch(e){}
+}
+
+// Доля изменённого текста. Полный диф на 4000 символов — квадратичная работа на
+// телефоне, поэтому срезаем общий префикс и суффикс: остаток и есть правка.
+function jShare(before, after){
+  try {
+    const a = String(before || ''), b = String(after || '');
+    if(!a && !b) return 0;
+    if(!a || !b) return 100;
+    if(a === b) return 0;
+    let p = 0; const max = Math.min(a.length, b.length);
+    while(p < max && a[p] === b[p]) p++;
+    let s = 0;
+    while(s < max - p && a[a.length-1-s] === b[b.length-1-s]) s++;
+    const changed = Math.max(a.length, b.length) - p - s;
+    return Math.round(changed / Math.max(a.length, b.length) * 100);
+  } catch(e){ return null; }
+}
+
+// Состав выбранных игр в момент старта работы. Постфактум по нему видно, какие
+// игры вообще попадают в контент, в каком ценовом диапазоне, сколько из них
+// доходит до экспорта. Один снимок на цепочку — а не событие на каждый чекбокс
+// (иначе повторится ~/catalog-journal: 17 тыс. строк из цикла и ноль смысла).
+function jSelSnapshot(list){
+  try {
+    const arr = (list || []).map(g => ({
+      t: _displayTitle(g.title || ''), p: g.priceRUB || 0, d: g.discount || 0,
+      desc: !!g.description, custom: !!(g._custom || g.custom)
+    }));
+    return {
+      n: arr.length,
+      titles: arr.map(x => x.t),
+      prices: arr.map(x => x.p),
+      discounts: arr.map(x => x.d),
+      withDesc: arr.filter(x => x.desc).length,
+      custom: arr.filter(x => x.custom).length
+    };
+  } catch(e){ return { n: (list || []).length }; }
+}
+
+// Отправка пачки. Ошибка сети НЕ теряет события — остаются в буфере до следующего
+// повода. Токен читаем НАПРЯМУЮ (не через _claudeHeaders): журнал не имеет права
+// показать окно ввода токена — человек его не просил.
+function _jBatch(buf, maxBytes){
+  const out = []; let bytes = 2;
+  for(const e of buf){
+    if(out.length >= J_BATCH_MAX) break;
+    const size = new Blob([JSON.stringify(e)]).size + 1;
+    if(out.length && bytes + size > maxBytes) break;
+    out.push(e); bytes += size;
+  }
+  return out;
+}
+async function jFlush(opts){
+  const keepalive = !!(opts && opts.keepalive);
+  // Проверка ДО try/finally: иначе вызов, который сам ничего не отправлял, снял бы
+  // флаг за уже идущей отправкой, и пачка ушла бы дважды.
+  if(_jSending) return;
+  let buf;
+  try { buf = _jRead(); } catch(e){ return; }
+  if(!buf.length) return;
+  let token = '';
+  try { token = localStorage.getItem('cc_admin_token') || ''; } catch(e){}
+  if(!token) return; // токена ещё нет — события ждут в буфере
+  const batch = _jBatch(buf, keepalive ? J_KEEPALIVE_B : Infinity);
+  if(!batch.length) return;
+  _jSending = true;
+  try {
+    const resp = await fetch(J_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ events: batch }),
+      keepalive,
+    });
+    if(resp.ok){
+      // Убираем ИМЕННО отправленные события: пока шёл запрос, буфер мог и
+      // пополниться с конца, и обрезаться с начала по потолку.
+      const sent = new Map();
+      for(const e of batch){ const k = JSON.stringify(e); sent.set(k, (sent.get(k) || 0) + 1); }
+      const rest = [];
+      for(const e of _jRead()){
+        const k = JSON.stringify(e);
+        const n = sent.get(k) || 0;
+        if(n > 0) sent.set(k, n - 1); else rest.push(e);
+      }
+      _jWrite(rest);
+    } else {
+      console.warn('[journal] сервер ответил', resp.status);
+    }
+  } catch(e){
+    console.warn('[journal] отправка не удалась:', e && e.message);
+  } finally {
+    _jSending = false;
+  }
+}
+// Четвёртый повод отправить — уход со страницы. visibilitychange ловит сворачивание
+// на телефоне, pagehide — закрытие вкладки и переход по ссылке.
+try {
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'hidden'){ _jAggFlushAll(); jFlush({ keepalive: true }); }
+  });
+  window.addEventListener('pagehide', () => { _jAggFlushAll(); jFlush({ keepalive: true }); });
+  window.addEventListener('error', (ev) => {
+    jError('window', (ev && ev.message) || 'script error', { src: ev && ev.filename, line: ev && ev.lineno });
+  });
+} catch(e){ console.warn('[journal] обработчики не навешаны:', e && e.message); }
+
 // ── Snapshot ──────────────────────────────────────────────
 async function loadSnapshot() {
   document.getElementById('loading').style.display = 'flex';
@@ -574,7 +801,9 @@ async function loadSnapshot() {
     renderTable();
     document.getElementById('loading').style.display = 'none';
     document.getElementById('main').style.display = 'flex';
+    jEvent('session_start', { games: games.length, custom: games.filter(g => g._custom).length });
   } catch(e) {
+    jError('snapshot', e.message);
     document.getElementById('loading').innerHTML = `<div style="color:#e74c3c">Ошибка загрузки: ${e.message}</div><button class="btn" onclick="loadSnapshot()" style="margin-top:12px">Повторить</button>`;
   } finally {
     document.getElementById('btn-refresh').disabled = false;
@@ -755,15 +984,18 @@ function toggleGame(gi) {
   updateSelCount();
 }
 function deselectAll() {
+  jEvent('used', { feature: 'deselectAll', was: games.filter(g => g._sel).length });
   games.forEach(g => { g._sel = false; });
   updateButtons();
   filterGames();
 }
 function toggleOnlySelected(checked) {
+  jEvent('used', { feature: 'onlySelected', on: !!checked });
   _onlySelected = checked;
   filterGames();
 }
 function setSort(key) {
+  jEvent('used', { feature: 'sort', key, dir: (_sortKey === key ? -_sortDir : 1) });
   if (_sortKey === key) _sortDir = -_sortDir;
   else { _sortKey = key; _sortDir = 1; }
   ['price', 'discount'].forEach(k => {
@@ -802,6 +1034,10 @@ function filterGames() {
   else if (_sortKey === 'discount') base.sort((a, b) => _sortDir * ((a.discount || 0) - (b.discount || 0)));
   filtered = base;
   renderTable();
+  // Поиск пишем схлопнутым: filterGames зовётся на КАЖДУЮ букву, а интересен
+  // законченный запрос и то, нашёлся ли по нему хоть кто-то (пустой результат —
+  // это либо кривое название в снапшоте, либо игра, которой у нас нет).
+  if (q) jAgg('search', 'search', { q, found: base.length }, undefined, undefined, 1200);
 }
 
 // ── Utils ──────────────────────────────────────────────────
@@ -820,10 +1056,30 @@ function showToast(msg, ms=3000) {
 // ── TG Modal ───────────────────────────────────────────────
 function openTGPost() {
   document.getElementById('tg-modal').classList.add('open');
+  jChainNew('post');
+  jEvent('used', Object.assign({ feature: 'openTGPost' }, jSelSnapshot(games.filter(g => g._sel && g.priceRUB))));
   loadTgTemplate();
 }
 function closeTGPost() {
   document.getElementById('tg-modal').classList.remove('open');
+  _jPostEdited();                       // правку ловим ДО того, как она уедет вместе с модалкой
+  if (_ccPostBot && !_jExported) jEvent('rejected', { mode: 'post', reason: 'closed', botBefore: _ccPostBot, aiPasses: _jAiPasses, decisionMin: _jMinutes() });
+  _jAggFlushAll();
+  jFlush();
+}
+// Версия ИИ ДО правки человека. Ловушка скилла «логировать до перезаписи»: пост
+// живёт в contenteditable #out-text, и первый же набранный символ затирает то,
+// что предложила модель — восстановить это потом нечем.
+let _ccPostBot = '';
+let _ccPostEditLogged = '';
+function _jPostEdited(){
+  try {
+    if (!_ccPostBot) return;
+    const cur = _outSerialize('plain');
+    if (!cur || cur === _ccPostBot || cur === _ccPostEditLogged) return;
+    _ccPostEditLogged = cur;
+    jEvent('edited', { mode: 'post', botBefore: _ccPostBot, edited: cur, editSharePct: jShare(_ccPostBot, cur) });
+  } catch(e){}
 }
 function saveTgTemplate() {
   localStorage.setItem('tg_header', document.getElementById('tg-header')?.value || '');
@@ -968,7 +1224,13 @@ async function generateAIPost() {
         const data = await resp.json();
         const text = data.content.map(c => c.text || '').join('').replace(/```json|```/g, '').trim();
         let parsed;
-        try { parsed = JSON.parse(text); } catch(e) { console.warn(`Пакет ${ci + 1}: неверный JSON`, text); continue; }
+        try { parsed = JSON.parse(text); } catch(e) {
+          console.warn(`Пакет ${ci + 1}: неверный JSON`, text);
+          // Раньше пакет пропадал молча: игры оставались без описания, а причина
+          // жила только в консоли того браузера, где это случилось.
+          jError('post_json', `пакет ${ci + 1}: неверный JSON`, { model: descModel, raw: text, titles: chunk.map(g => _displayTitle(g.title)) });
+          continue;
+        }
         Object.entries(parsed).forEach(([idx, desc]) => {
           const g = chunk[parseInt(idx, 10) - 1];
           if (g && typeof desc === 'string' && desc.trim()) genDescs[g.title] = desc.trim();
@@ -1001,24 +1263,46 @@ async function generateAIPost() {
     status.textContent = `✅ Готово! Из архива: ${sel.length - missing.length}, новых: ${missing.length - lost.length}` + (lost.length ? `, без описания: ${lost.length}` : '');
     _updateOutCount();
     document.getElementById('out-panel').style.display = '';
+    // Снимок версии ИИ — строго ДО того, как человек начнёт править #out-text.
+    _ccPostBot = _outSerialize('plain');
+    _ccPostEditLogged = '';
+    _jAiPasses++;
+    jEvent('generated', {
+      mode: 'post', model: descModel, bot: _ccPostBot,
+      n: sel.length, fromArchive: sel.length - missing.length,
+      aiNew: missing.length - lost.length, lost: lost.length,
+      lostTitles: lost.map(g => _displayTitle(g.title)),
+      aiPasses: _jAiPasses, len: _ccPostBot.length, limit: _tgLimit()
+    });
     showToast(lost.length ? `⚠️ Пост готов, но ${lost.length} игр без описания` : `✅ Пост готов (${sel.length} игр)`);
     setTimeout(() => prog.style.display = 'none', 2500);
   } catch(e) {
     clearInterval(ticker);
     status.textContent = '❌ ' + e.message;
+    jError('post_gen', e.message, { model: descModel, n: sel.length });
     showToast('Ошибка: ' + e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = '🤖 Собрать пост (ИИ для пустых)';
   }
 }
-function regenPost() { document.getElementById('out-panel').style.display = 'none'; generateAIPost(); }
+function regenPost() {
+  // Пересборка без правки = версия модели отвергнута целиком (aiPasses в скилле).
+  _jPostEdited();
+  if (_ccPostBot) jEvent('rejected', { mode: 'post', reason: 'regen', botBefore: _ccPostBot, aiPasses: _jAiPasses });
+  document.getElementById('out-panel').style.display = 'none';
+  generateAIPost();
+}
 // Копируем и HTML (названия — настоящие <a>, при вставке в rich-текстовые поля становятся
 // кликабельной ссылкой прямо в слове, как просил Денис), и текстовый фолбэк "Название (url)"
 // для мест, куда HTML из буфера не долетает (голый URL там хотя бы не теряется).
 function copyOut() {
   const plain = _outSerialize('plain');
   if (!plain) { showToast('Сначала сгенерируй'); return; }
+  _jPostEdited();
+  _jExported = true;
+  jEvent('published', { kind: 'copy', mode: 'post', final: plain, len: plain.length,
+    editSharePct: _ccPostBot ? jShare(_ccPostBot, plain) : null, aiPasses: _jAiPasses, decisionMin: _jMinutes() });
   const html = document.getElementById('out-text').innerHTML;
   if (window.ClipboardItem) {
     const item = new ClipboardItem({
@@ -1086,11 +1370,16 @@ async function aiShrinkPost(){
     const data = await resp.json();
     const text = data.content.map(c => c.text || '').join('').trim().replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '').trim();
     if (!text) throw new Error('пустой ответ модели');
+    _jPostEdited(); // правку человека фиксируем до того, как её затрёт сжатая версия
     document.getElementById('out-text').innerHTML = _mdLinksToHtml(text);
     _tgDisarmSend(); _updateOutCount();
     const nowLen = Math.max(_outSerialize('plain').length, _outSerialize('md').length);
+    _ccPostBot = _outSerialize('plain'); _ccPostEditLogged = ''; _jAiPasses++;
+    jEvent('generated', { mode: 'shrink', model: descModel, bot: _ccPostBot,
+      before: raw.length, after: nowLen, target, limit: lim, fits: nowLen <= lim, aiPasses: _jAiPasses });
     showToast(nowLen <= lim ? `✂️ Сжато: ${nowLen.toLocaleString('ru')} символов — влезает` : `⚠️ Всё ещё ${nowLen.toLocaleString('ru')} — нажми ещё раз`);
   } catch(e) {
+    jError('shrink', e.message, { model: descModel, before: raw.length, limit: lim });
     showToast('Ошибка сжатия: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '✂️ Сжать ИИ до лимита'; }
@@ -1110,6 +1399,7 @@ async function sendPostToTG(){
   const lim = _tgLimit();
   if (sendText.length > lim) {
     _tgDisarmSend();
+    jEvent('rejected', { mode: 'post', reason: 'over_limit', len: sendText.length, limit: lim, hasImg: !!_ccPostImg });
     showToast(_ccPostImg
       ? `❌ ${sendText.length.toLocaleString('ru')} символов — с картинкой Telegram примет только ${lim.toLocaleString('ru')} (подпись к фото). Сократи пост или убери картинку.`
       : `❌ Пост ${sendText.length.toLocaleString('ru')} символов — лимит Telegram ${lim.toLocaleString('ru')}. Сократи.`);
@@ -1148,7 +1438,18 @@ async function sendPostToTG(){
       else msg += ' · ⚠️ ВК не опубликован: ' + (vk.error || 'ошибка');
     }
     showToast(msg);
+    // Единственный полностью замкнутый контур инструмента: здесь виден не только
+    // экспорт, но и исход публикации (включая ВК). У скачанного PNG исхода нет.
+    _jExported = true;
+    _jPostEdited();
+    const plainFinal = _outSerialize('plain');
+    jEvent('published', { kind: 'tg_post', mode: 'post', final: plainFinal, len: sendText.length, limit: lim,
+      hasImg: !!_ccPostImg, imgLabel: _ccPostImgLabel || null,
+      vk: vk ? (vk.ok ? (vk.post_id ? 'ok' : ('skipped:' + (vk.skipped || ''))) : ('error:' + (vk.error || ''))) : null,
+      editSharePct: _ccPostBot ? jShare(_ccPostBot, plainFinal) : null,
+      aiPasses: _jAiPasses, decisionMin: _jMinutes() });
   } catch (e) {
+    jError('tg_send', e.message, { len: sendText.length, hasImg: !!_ccPostImg });
     showToast('Ошибка отправки: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '📤 Отправить в канал'; }
