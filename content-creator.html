@@ -375,7 +375,7 @@
         </div>
         <!-- Description zone controls -->
         <div>
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:5px"><input type="checkbox" id="st-desc-on" checked onchange="_stDescOn=this.checked;localStorage.setItem('cc_desc_on',this.checked?'1':'0');_stRenderTemplate()" style="accent-color:var(--blue)"> Описание на картинке</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:5px"><input type="checkbox" id="st-desc-on" checked onchange="_stDescOn=this.checked;localStorage.setItem('cc_desc_on',this.checked?'1':'0');jEvent('used',{feature:'descOn',to:this.checked});_stRenderTemplate()" style="accent-color:var(--blue)"> Описание на картинке</label>
           <div id="st-desc-game-row" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)">Игра: <select id="st-desc-game" onchange="_stDescGame=+this.value;_stSyncDescEdit(true);_stRenderTemplate()" style="background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:3px 6px;outline:none"><option value="0">1</option></select> <button class="bf sec" id="st-gen-short-btn" onclick="_stGenShortDescs()" style="padding:4px 8px;font-size:10px">🤖 Текст</button> <span id="st-gen-short-prog" style="display:none;font-size:10px;color:var(--accent)">...</span></div>
           <textarea id="st-desc-edit" rows="2" oninput="_stEditDesc(this.value)" placeholder="Текст описания на картинке — можно писать и править вручную" title="То, что попадёт на саму сторис. Кнопка «🤖 Текст» заполняет это поле, дальше правь как хочешь." style="width:100%;box-sizing:border-box;margin-top:5px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;padding:6px;resize:vertical;font-family:inherit;outline:none"></textarea>
         </div>
@@ -822,6 +822,7 @@ function _mergeCustomItems() {
   games = [...customs, ...games];
 }
 function openCustomItem() {
+  jEvent('used', { feature: 'openCustomItem' });
   _ciPhoto = '';
   ['ci-title','ci-price','ci-old','ci-desc'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('ci-photo').value = '';
@@ -860,11 +861,13 @@ function saveCustomItem() {
   const item = { _cid: Date.now(), id: null, title, priceRUB: price, discount, icon: _ciPhoto || '', description: document.getElementById('ci-desc').value.trim(), store: 'RUB' };
   const list = _loadCustomItems(); list.unshift(item); _saveCustomItems(list);
   games.unshift({...item, hidden: false, _custom: true, _sel: true});
+  jEvent('used', { feature: 'customItemAdd', title, price, discount: discount || 0, hasPhoto: !!_ciPhoto, hasDesc: !!item.description });
   filterGames(); updateButtons(); closeCustomItem();
   showToast('✅ Товар добавлен' + (discount ? ` (скидка −${discount}%)` : ''));
 }
 function removeCustomItem(cid) {
   if (!confirm('Удалить этот товар из таблицы?')) return;
+  jEvent('used', { feature: 'customItemRemove', title: (games.find(g => g._cid === cid) || {}).title || null });
   _saveCustomItems(_loadCustomItems().filter(c => c._cid !== cid));
   games = games.filter(g => g._cid !== cid);
   filterGames(); updateButtons();
@@ -888,12 +891,14 @@ function brandSaveCurrent() {
   const all = _brandList(); all[name] = snap;
   localStorage.setItem('cc_brand_presets', JSON.stringify(all));
   localStorage.setItem('cc_brand_current', name);
+  jEvent('used', { feature: 'brandSave', name, keys: Object.keys(snap).length });
   _brandRenderSel();
   showToast(`💾 Бренд «${name}» сохранён`);
 }
 function brandApply(name) {
   if (!name) { localStorage.removeItem('cc_brand_current'); return; }
-  const snap = _brandList()[name]; if (!snap) { showToast('Пресет не найден'); return; }
+  const snap = _brandList()[name]; if (!snap) { jError('brand_apply', 'пресет не найден', { name }); showToast('Пресет не найден'); return; }
+  jEvent('used', { feature: 'brandApply', name });
   BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else localStorage.removeItem(k); });
   localStorage.setItem('cc_brand_current', name);
   _brandApplyLive();
@@ -929,6 +934,7 @@ function brandDelete() {
   if (!name) { showToast('Сначала выбери пресет в списке'); return; }
   if (!confirm(`Удалить пресет «${name}»? Текущие настройки при этом не изменятся.`)) return;
   const all = _brandList(); delete all[name];
+  jEvent('used', { feature: 'brandDelete', name });
   localStorage.setItem('cc_brand_presets', JSON.stringify(all));
   if (localStorage.getItem('cc_brand_current') === name) localStorage.removeItem('cc_brand_current');
   _brandRenderSel();
@@ -1946,7 +1952,7 @@ let _stLogoUrl=localStorage.getItem('cc_logo_url')||DEFAULT_LOGO_URL;
 let _stLogoPos=localStorage.getItem('cc_logo_pos')||'tr';
 let _stLogoImg=null;
 let _logoShape=localStorage.getItem('cc_logo_shape')||'circle';
-function _setLogoShape(v){_logoShape=v;localStorage.setItem('cc_logo_shape',v);if(document.getElementById('coll-modal')?.classList.contains('open'))redrawPreview();if(_stMode==='templates')_stRenderTemplate();}
+function _setLogoShape(v){if(_logoShape!==v)jEvent('used',{feature:'logoShape',from:_logoShape,to:v});_logoShape=v;localStorage.setItem('cc_logo_shape',v);if(document.getElementById('coll-modal')?.classList.contains('open'))redrawPreview();if(_stMode==='templates')_stRenderTemplate();}
 function _drawLogoBox(ctx,img,x,y,size,shape){
   ctx.save();
   if(shape==='free'){
@@ -2120,6 +2126,7 @@ function _stApplyGrain(ctx,cw,ch){
 }
 // ── BG Style (Collage) ────────────────────────────────────
 function _stSetCollageBgStyle(s){
+  if(_collageBgStyle!==s)jEvent('used',{feature:'collageBgStyle',from:_collageBgStyle,to:s});
   _collageBgStyle=s;localStorage.setItem('cc_collage_bg_style',s);
   ['flat','glow','grain'].forEach(k=>{const b=document.getElementById('cl-bg-'+k);if(!b)return;const on=k===s;b.style.border='1px solid '+(on?'var(--blue)':'var(--border)');b.style.background=on?'rgba(0,112,209,.2)':'var(--card2)';b.style.color=on?'var(--blue)':'var(--muted)';});
   redrawPreview();
@@ -2137,8 +2144,10 @@ function _drawCollageBg(ctx,W,H){
 function _stSaveLogoUrl(v){
   localStorage.setItem('cc_logo_url',v);
   _stLogoUrl=v||DEFAULT_LOGO_URL;
+  // Сам URL в журнал не кладём (может быть 218 КБ base64) — только факт замены.
+  jAgg('logourl','used',{feature:'logoUrl',custom:!!v,isData:String(v||'').startsWith('data:'),len:(v||'').length},undefined,undefined,1500);
   const img=new Image();if(!_stLogoUrl.startsWith('data:'))img.crossOrigin='anonymous';
-  img.onload=()=>{_stLogoImg=img;_stRenderTemplate();};img.onerror=()=>{_stLogoImg=null;_stRenderTemplate();};img.src=_stLogoUrl;
+  img.onload=()=>{_stLogoImg=img;_stRenderTemplate();};img.onerror=()=>{_stLogoImg=null;jError('logo_load','логотип не загрузился',{isData:_stLogoUrl.startsWith('data:')});_stRenderTemplate();};img.src=_stLogoUrl;
 }
 function _stSetLogoPosOpt(v){jEvent('used',{feature:'logoPos',from:_stLogoPos,to:v});_stLogoPos=v;localStorage.setItem('cc_logo_pos',v);_stRenderTemplate();}
 // Смена шаблона вынесена из инлайн-onclick в функцию: перебор шаблонов до экспорта —
