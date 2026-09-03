@@ -14,17 +14,26 @@ const target = process.argv[2] || path.join(require('os').homedir(), 'cc-journal
 const monthFilter = process.argv[3] || null;
 
 function readEvents(t) {
-  const files = fs.statSync(t).isDirectory()
+  if (!fs.existsSync(t)) { console.log('Нет такого журнала: ' + t); process.exit(0); }
+  const isDir = fs.statSync(t).isDirectory();
+  const files = isDir
     ? fs.readdirSync(t).filter(f => f.endsWith('.jsonl')).sort().map(f => path.join(t, f))
-    : [t];
+    : [t];   // отдельный файл берём целиком: фильтр по месяцу — про имена месячных файлов
   const out = [];
+  const seen = new Set();
+  let dup = 0;
   for (const f of files) {
-    if (monthFilter && !path.basename(f).startsWith(monthFilter)) continue;
+    if (isDir && monthFilter && !path.basename(f).startsWith(monthFilter)) continue;
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line.trim()) continue;
-      try { out.push(JSON.parse(line)); } catch (e) { /* битая строка — пропускаем, отчёт важнее */ }
+      let e; try { e = JSON.parse(line); } catch (err) { continue; } // битая строка — отчёт важнее
+      // Дубли: отправка при уходе со страницы уходит на сервер, но очистить буфер
+      // выгруженная вкладка уже не успевает — те же события приезжают ещё раз.
+      if (e.eid) { if (seen.has(e.eid)) { dup++; continue; } seen.add(e.eid); }
+      out.push(e);
     }
   }
+  if (dup) console.log('(снято дублей по eid: ' + dup + ')');
   return out.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
 }
 
@@ -72,12 +81,17 @@ console.log(h('ЧТО ПЕРЕПИСЫВАЮ ЗА ИИ'));
 const modes = [...new Set(of('generated').map(e => e.mode))];
 for (const m of modes) {
   const gen = of('generated').filter(e => e.mode === m);
-  const eds = of('edited').filter(e => e.mode === m);
+  // Правки текста, который ИИ не писал (набрано руками), в долю переписанного не
+  // берём — иначе главная метрика качества модели считается по чужому тексту.
+  const edsAll = of('edited').filter(e => e.mode === m);
+  const eds = edsAll.filter(e => e.fromAI !== false);
+  const byHand = edsAll.length - eds.length;
   const shares = eds.map(e => e.editSharePct).filter(x => typeof x === 'number');
   const passes = gen.map(e => e.aiPasses).filter(x => typeof x === 'number');
   console.log('\n' + m + ': генераций ' + gen.length + ', правок ' + eds.length +
     (shares.length ? ', переписано медианой ' + med(shares) + '% (макс ' + Math.max(...shares) + '%)' : ', правок текста не было') +
-    (passes.length ? ', заходов до решения макс ' + Math.max(...passes) : ''));
+    (passes.length ? ', заходов до решения макс ' + Math.max(...passes) : '') +
+    (byHand ? ' · написано руками без ИИ: ' + byHand : ''));
   const lost = gen.reduce((s, e) => s + (e.lost || 0), 0);
   if (lost) console.log('  игр осталось без описания: ' + lost + ' — ' + [...new Set(gen.flatMap(e => e.lostTitles || []))].slice(0, 8).join(', '));
   const worst = eds.filter(e => typeof e.editSharePct === 'number').sort((a, b) => b.editSharePct - a.editSharePct)[0];
