@@ -1152,7 +1152,7 @@ function pickEmoji(g){
 }
 
 // ── TG Post Generator ──────────────────────────────────────
-const descModel = localStorage.getItem('descModel') || 'claude-sonnet-4-6';
+const descModel = localStorage.getItem('descModel') || 'claude-sonnet-5';
 const TG_TEXT_LIMIT = 4096;    // лимит Telegram sendMessage (пост без картинки)
 const TG_CAPTION_LIMIT = 1024; // лимит подписи sendPhoto (пост с картинкой) — это ограничение Telegram, не наше
 // Картинка, прикреплённая к посту кнопкой «📎 В пост» в коллаже (data URL, JPEG). Пока она стоит —
