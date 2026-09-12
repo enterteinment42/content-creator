@@ -1525,7 +1525,12 @@ function _imgFail(stage,src,extra){
     brief=isData?`data: (${Math.round(src.length/1024)} КБ)`:src.replace(/([?&])(_dl|_st)=\d+/g,'$1').replace(/[?&]+$/,'');
     if(!isData){ try{ host=new URL(src,location.href).host; }catch(e){} }
   }
-  jError('img_load',stage,Object.assign({src:brief,host,proxied:!isData&&typeof src==='string'&&src.includes('/igdb/img')},extra||{}));
+  const proxied=!isData&&typeof src==='string'&&src.includes('/igdb/img');
+  // jError глушит событие после третьего повтора, а ключ у него — stage+message. Если слать одним
+  // message только этап, то пяти неудачных обложек хватает, чтобы журнал замолчал до конца сессии,
+  // и следующий сбой с ДРУГОГО адреса (прямой снапшот против прокси) не запишется вовсе — а это
+  // ровно тот вопрос, ради которого журналирование и заводилось. Кладём в message ещё и хост.
+  jError('img_load',stage+(host?' '+host:'')+(proxied?' (прокси)':''),Object.assign({src:brief,host,proxied,stage},extra||{}));
   if(!/_preview$/.test(stage)) return;
   // Экспорт про свои промахи говорит сам («N обл. не загрузилось»), тост нужен только превью.
   _imgFailN++;clearTimeout(_imgFailT);
@@ -1562,7 +1567,9 @@ function _cleanEditionTitle(s){
     // «VI» — GTA VI в GTA (1997), и IGDB честно отдаёт по обрубку confidence:'high'. Проверка
     // _lowMatchOk такие матчи не ловит (она страхует только 'low'), поэтому чужая обложка вставала
     // в коллаж молча. Римские цифры не трогаем, коды режем как раньше.
-    .replace(/\s+([A-Z]{2,3})$/, (m, w) => /^(II|III|IV|VI|VII|IX|XI|XII|XIV|XV|XX)$/.test(w) ? m : '')
+    // Список — все римские числа длиной 2-3 знака (длиннее сюда не попадает: {2,3}). XVI обязателен —
+    // это Final Fantasy XVI, без него «FINAL FANTASY XVI» снова схлопнулось бы в «FINAL FANTASY».
+    .replace(/\s+([A-Z]{2,3})$/, (m, w) => /^(II|III|IV|VI|VII|IX|XI|XII|XIV|XV|XVI|XIX|XX|XXI)$/.test(w) ? m : '')
     .trim();
 }
 // Лёгкая чистка названия для показа на постах/картинках/в ИИ-промптах: убирает ®/™/©, коды вида
@@ -2269,6 +2276,13 @@ function _getGrainCanvas(){
 }
 function _applyGrainOverlay(ctx,x,y,w,h,alpha){
   const pat=ctx.createPattern(_getGrainCanvas(),'repeat');if(!pat)return;
+  // Зерно — тайл в 160 пикселей КАНВАСА, а превью мельче экспорта (сторис 720 против 1080, коллаж
+  // вдвое). Без поправки на экране шум крупнее, чем в скачанном PNG, — человек настраивает по одной
+  // картинке, а получает другую (тот же класс, что UX-12). Держим тайл постоянной долей кадра.
+  // Опора — 600px, меньше самого мелкого превью (коллаж 632): масштаб всегда ≥1, иначе зерно
+  // ужалось бы мельче пикселя и превратилось в тот же шум, что и без поправки.
+  const k=Math.max(1,(ctx.canvas&&ctx.canvas.width?ctx.canvas.width:1080)/600);
+  if(pat.setTransform){try{pat.setTransform(new DOMMatrix([k,0,0,k,0,0]));}catch(e){}}
   // Было 'overlay' — на тёмном фоне оно не проявляется вообще: для backdrop ≈0.04 overlay сводится
   // к умножению, и шум вокруг 0.5 не меняет ничего. Замер это подтверждал: «Зерно» в коллаже
   // (фон #0a0a16) двигало ровно 0% пикселей. 'soft-light' работает и по теням, и по обложке.
@@ -2455,7 +2469,10 @@ function _stRenderTemplate(){
 const _ST_BG_TPLS=new Set(['fan','cascade']);
 const ST_GRAIN_ALPHA=0.5;
 function _stSyncBgBtns(){
-  const avail=_ST_BG_TPLS.has(_stTplId);
+  // «Горизонт» — случай на границе: он рисует фон только когда обложка не загрузилась (или её нет
+  // у своего товара). Тогда кнопки настоящие и гасить их нельзя; как только обложка приехала —
+  // фон снова перекрыт, и они возвращаются в погашенное состояние.
+  const avail=_ST_BG_TPLS.has(_stTplId)||(_stTplId==='horizon'&&!(_stG[0]&&_stG[0].imgEl));
   ['blur','glow'].forEach(k=>{
     const b=document.getElementById('st-bg-'+k);if(!b)return;
     b.disabled=!avail;b.style.opacity=avail?'1':'.4';b.style.cursor=avail?'pointer':'not-allowed';
@@ -3259,7 +3276,8 @@ async function downloadStoryBatch(){
       const tryLoad=(url,fallback)=>{
         const img=new Image();img.crossOrigin='anonymous';
         img.onload=()=>{entry.imgEl=img;entry.imgUrl=url;resolve();};
-        img.onerror=()=>{if(fallback&&fallback!==url){tryLoad(fallback,null);}else{fail++;resolve();}};
+        // Батч — до 15 обложек подряд и без превью на экране: именно здесь немой промах дороже всего.
+        img.onerror=()=>{_imgFail('story_batch',url,{title:entry.title,hadFallback:!!(fallback&&fallback!==url)});if(fallback&&fallback!==url){tryLoad(fallback,null);}else{fail++;resolve();}};
         img.src=url;
       };
       tryLoad(primary,iconUrl);
