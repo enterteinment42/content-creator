@@ -1777,12 +1777,14 @@ function attachPreview(){
 function _drawCellImg(ctx,c,imgEl,t){const base=Math.max(c.w/imgEl.naturalWidth,c.h/imgEl.naturalHeight);const s=base*t.scale;ctx.drawImage(imgEl,c.x+(c.w-imgEl.naturalWidth*s)/2+t.ox,c.y+(c.h-imgEl.naturalHeight*s)/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);}
 function _drawCircleImg(ctx,cx,cy,r,imgEl,t){const d=r*2;const base=Math.max(d/imgEl.naturalWidth,d/imgEl.naturalHeight);const s=base*t.scale;ctx.save();ctx.fillStyle=_frameColor;ctx.beginPath();ctx.arc(cx,cy,r+Math.max(8,Math.round(r*0.05)),0,Math.PI*2);ctx.fill();ctx.restore();ctx.save();ctx.shadowColor='rgba(0,0,0,0.45)';ctx.shadowBlur=24;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.clip();ctx.shadowColor='transparent';ctx.drawImage(imgEl,cx-imgEl.naturalWidth*s/2+t.ox,cy-imgEl.naturalHeight*s/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);ctx.restore();}
 function _drawPlateImg(ctx,cx,cy,side,imgEl,t,rad){const base=Math.max(side/imgEl.naturalWidth,side/imgEl.naturalHeight);const s=base*t.scale;const border=Math.max(10,Math.round(side*0.04));ctx.save();ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=26;ctx.fillStyle=_frameColor;rr(ctx,cx-side/2-border,cy-side/2-border,side+border*2,side+border*2,rad+2);ctx.fill();ctx.restore();ctx.save();rr(ctx,cx-side/2,cy-side/2,side,side,rad);ctx.clip();ctx.drawImage(imgEl,cx-imgEl.naturalWidth*s/2+t.ox,cy-imgEl.naturalHeight*s/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);ctx.restore();}
-function redrawPreview(targetCanvas){
+// skipGrain — для мультиформатного экспорта: там готовый коллаж вписывается в другой холст,
+// и зерно кладётся один раз уже на него, иначе шум лёг бы дважды в середине кадра.
+function redrawPreview(targetCanvas,skipGrain){
   const canvas=targetCanvas||document.getElementById('coll-canvas');if(!canvas||!_previewCells.length) return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   _drawCollageBg(ctx,W,H);
   const lay=_collageLayout;
-  if(lay==='circ4d'&&_previewCells[4]?.diag){_redrawCirc4d(ctx,W,H);_drawCollageWatermark(ctx,W,H);return;}
+  if(lay==='circ4d'&&_previewCells[4]?.diag){_redrawCirc4d(ctx,W,H);_drawCollageWatermark(ctx,W,H);if(!skipGrain)_drawCollageGrain(ctx,W,H);return;}
   collageCovers.forEach((c,i)=>{
     if(i>=_previewCells.length) return;const cell=_previewCells[i];
     if(cell.circle||cell.plate) return;
@@ -1793,6 +1795,7 @@ function redrawPreview(targetCanvas){
   });
   if(lay==='circ4'||lay==='square5'){const oi=_previewCells.findIndex(c=>c.circle||c.plate);if(oi>=0&&oi<collageCovers.length){const cell=_previewCells[oi];const cv=collageCovers[oi];initT(oi);if(cell.circle&&cv.imgEl){_drawCircleImg(ctx,cell.cx,cell.cy,cell.r,cv.imgEl,cv.transform);}else if(cell.plate&&cv.imgEl){_drawPlateImg(ctx,cell.cx,cell.cy,cell.side,cv.imgEl,cv.transform,8);}}}
   _drawCollageWatermark(ctx,W,H);
+  if(!skipGrain)_drawCollageGrain(ctx,W,H);
 }
 function _drawCollageWatermark(ctx,W,H){
   if(_collageMode!=='cards') return;
@@ -1986,12 +1989,13 @@ function downloadCollageFormat(fmt){
   const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
   Promise.all(tasks).then(()=>{
     const src=document.createElement('canvas');src.width=W;src.height=H;
-    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(src);_collageLayout=prevLayout;_previewCells=prevCells;
+    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(src,true);_collageLayout=prevLayout;_previewCells=prevCells;
     collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();
     const out=document.createElement('canvas');out.width=f.w;out.height=f.h;const octx=out.getContext('2d');
     _drawCollageBg(octx,f.w,f.h);
     const fit=Math.min(f.w/W,f.h/H),dw=W*fit,dh=H*fit,dx=(f.w-dw)/2,dy=(f.h-dh)/2;
     octx.drawImage(src,dx,dy,dw,dh);
+    _drawCollageGrain(octx,f.w,f.h);
     try{
       const a=document.createElement('a');a.download=f.file;a.href=out.toDataURL('image/png');a.click();
       if(_failed)showToast('⚠️ '+_failed+' обл. не загрузилось — в файле заглушки');
@@ -2253,7 +2257,8 @@ function _stRenderTemplateBg(ctx,cw,ch,g){
     const g2=ctx.createRadialGradient(cw*.88,ch*.78,0,cw*.88,ch*.78,cw*.55);g2.addColorStop(0,gc+'0.30)');g2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g2;ctx.fillRect(0,0,cw,ch);return;
   }
   const grd=ctx.createLinearGradient(0,0,0,ch);grd.addColorStop(0,'#12122a');grd.addColorStop(1,'#060614');ctx.fillStyle=grd;ctx.fillRect(0,0,cw,ch);
-  _stApplyGrain(ctx,cw,ch);
+  // Зерно здесь больше не накладываем: оно стало фильтром всего кадра (см. _stRenderTemplate),
+  // иначе в «Веере» и «Каскаде» шум лёг бы дважды.
 }
 function _getGrainCanvas(){
   if(_grainCanvas)return _grainCanvas;
@@ -2264,11 +2269,10 @@ function _getGrainCanvas(){
 }
 function _applyGrainOverlay(ctx,x,y,w,h,alpha){
   const pat=ctx.createPattern(_getGrainCanvas(),'repeat');if(!pat)return;
-  ctx.save();ctx.globalCompositeOperation='overlay';ctx.globalAlpha=alpha;ctx.fillStyle=pat;ctx.fillRect(x,y,w,h);ctx.restore();
-}
-function _stApplyGrain(ctx,cw,ch){
-  if(_stBgStyle!=='grain')return;
-  _applyGrainOverlay(ctx,0,0,cw,ch,0.5);
+  // Было 'overlay' — на тёмном фоне оно не проявляется вообще: для backdrop ≈0.04 overlay сводится
+  // к умножению, и шум вокруг 0.5 не меняет ничего. Замер это подтверждал: «Зерно» в коллаже
+  // (фон #0a0a16) двигало ровно 0% пикселей. 'soft-light' работает и по теням, и по обложке.
+  ctx.save();ctx.globalCompositeOperation='soft-light';ctx.globalAlpha=alpha;ctx.fillStyle=pat;ctx.fillRect(x,y,w,h);ctx.restore();
 }
 // ── BG Style (Collage) ────────────────────────────────────
 function _stSetCollageBgStyle(s){
@@ -2283,9 +2287,12 @@ function _drawCollageBg(ctx,W,H){
     const gc=_stGameGlowColor(collageCovers[0]);
     const b1=ctx.createRadialGradient(W*.2,H*.2,0,W*.2,H*.2,W*.9);b1.addColorStop(0,gc+'0.28)');b1.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=b1;ctx.fillRect(0,0,W,H);
     const b2=ctx.createRadialGradient(W*.82,H*.8,0,W*.82,H*.8,W*.65);b2.addColorStop(0,gc+'0.18)');b2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=b2;ctx.fillRect(0,0,W,H);
-  } else if(_collageBgStyle==='grain'){
-    _applyGrainOverlay(ctx,0,0,W,H,0.5);
   }
+  // Зерно здесь не кладём: под обложками фона не видно, оно доставалось только 12px рамке и зазорам.
+  // Теперь это фильтр всего коллажа — _drawCollageGrain последним слоем, как в сторис.
+}
+function _drawCollageGrain(ctx,W,H){
+  if(_collageBgStyle==='grain')_applyGrainOverlay(ctx,0,0,W,H,ST_GRAIN_ALPHA);
 }
 function _stSaveLogoUrl(v){
   localStorage.setItem('cc_logo_url',v);
@@ -2351,22 +2358,22 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   const cardH=Math.max(baseH,Math.min(Math.round(h*0.52),needH)),cardY=y+h-cardH;
   if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.92)';ctx.fillRect(x,cardY,w,cardH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,cardY,w,Math.max(3,Math.round(3*sx)));}
   else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,cardY-Math.round(cardH*.6),0,y+h);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.82)');grd.addColorStop(1,'rgba(8,8,20,.97)');ctx.fillStyle=grd;ctx.fillRect(x,cardY-Math.round(cardH*.6),w,cardH+Math.round(cardH*.6));}
-  else{ctx.fillStyle='rgba(6,6,16,0.88)';ctx.fillRect(x,cardY,w,cardH);}
+  // 'minimal' — плашку не рисуем вообще, текст ниже идёт по обложке с тенью
   // Контент распределён по всей высоте плашки (как в коллаже): название у верхней кромки, цена и
   // бейдж скидки — у нижней, описание — по центру свободного места между ними. Иначе текст жался
   // к верху, а нижние две трети плашки оставались пустыми.
   const vpad=Math.round(14*sx);
-  ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
+  ctx.save();_stTextShadow(ctx,sx);ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
   tlines.forEach((l,li)=>ctx.fillText(l,x+pad,cardY+vpad+li*tlh));ctx.restore();
   const priceY=y+h-vpad-pfs;
-  if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,priceY);ctx.restore();}
+  if(g.priceRUB){ctx.save();_stTextShadow(ctx,sx);ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,priceY);ctx.restore();}
   if(dlines.length){
     const top=cardY+vpad+titleH+Math.round(6*sx),bot=priceY-Math.round(6*sx);
     const dy=top+Math.max(0,(bot-top-descH)/2);
-    ctx.save();ctx.font=`${dfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(210,210,228,0.92)';ctx.textAlign='left';ctx.textBaseline='top';
+    ctx.save();_stTextShadow(ctx,sx);ctx.font=`${dfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(210,210,228,0.92)';ctx.textAlign='left';ctx.textBaseline='top';
     dlines.forEach((l,li)=>ctx.fillText(l,x+pad,dy+li*dlh));ctx.restore();
   }
-  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-pad-qrRes,by=Math.round(priceY+(pfs-bh)/2);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-pad-qrRes,by=Math.round(priceY+(pfs-bh)/2);ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(qrS)_stDrawQr(ctx,qrImg,x+w-pad-qrPadW-qrS,cardY+Math.round((cardH-qrS)/2),qrS);
 }
 function _stDrawDescZone(ctx,x,y,w,g,measureOnly){
@@ -2434,8 +2441,26 @@ function _stRenderTemplate(){
   const dgr=document.getElementById('st-desc-game-row');if(dgr)dgr.style.display=_stDescOn?'':'none';
   const dgs=document.getElementById('st-desc-game');if(dgs)dgs.style.display=n>1?'':'none';
   _stSyncDescEdit();
+  _stSyncBgBtns();
   ({poster:_stTplPoster,cards:_stTplCard1,hero:_stTplHero,fan:_stTplFan,diag:_stTplDiag,cascade:_stTplCascade,horizon:_stTplHorizon,neon:_stTplNeon}[_stTplId]||_stTplCard1)();
   if(_stLogoImg&&_stLogoPos!=='none')_stDrawTemplateLogo(_stCtx,_stCanvas.width,_stCanvas.height,_stCanvas.width/STORY_W);
+  // Зерно — фильтр всего кадра поверх всего, включая обложку и логотип. Раньше оно жило внутри
+  // «фона шаблона», а фон рисуют только «Веер» и «Каскад»: в остальных шести шаблонах обложка
+  // занимает кадр целиком, и кнопка «Зерно» не меняла ни одного пикселя.
+  if(_stBgStyle==='grain')_applyGrainOverlay(_stCtx,0,0,_stCanvas.width,_stCanvas.height,ST_GRAIN_ALPHA);
+}
+// Фон шаблона видно только там, где обложка не растянута на весь кадр. Кнопки «Blur-цвет» и «Glow»
+// в остальных шаблонах гасим (тот же приём, что у макетов коллажа при n≠5), чтобы они не выглядели
+// рабочими. «Тёмный» и «Зерно» доступны всегда: первый — это отсутствие эффекта, второй — фильтр кадра.
+const _ST_BG_TPLS=new Set(['fan','cascade']);
+const ST_GRAIN_ALPHA=0.5;
+function _stSyncBgBtns(){
+  const avail=_ST_BG_TPLS.has(_stTplId);
+  ['blur','glow'].forEach(k=>{
+    const b=document.getElementById('st-bg-'+k);if(!b)return;
+    b.disabled=!avail;b.style.opacity=avail?'1':'.4';b.style.cursor=avail?'pointer':'not-allowed';
+    b.title=avail?'':'В этом шаблоне обложка занимает весь кадр — фона под ней нет. Работает в «Веере» и «Каскаде».';
+  });
 }
 
 // ── 6 Templates ───────────────────────────────────────────
@@ -2599,7 +2624,7 @@ function _stTplCascade(){
     const plH=Math.round(cardH*.28),plY=cy+cardH-plH,pad=Math.round(14*sx);
     if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.90)';ctx.fillRect(x,plY,cardW,plH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,plY,cardW,Math.max(3,Math.round(3*sx)));}
     else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,plY-Math.round(plH*.6),0,cy+cardH);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.80)');grd.addColorStop(1,'rgba(8,8,20,.96)');ctx.fillStyle=grd;ctx.fillRect(x,plY-Math.round(plH*.6),cardW,plH+Math.round(plH*.6));}
-    else{ctx.fillStyle='rgba(6,6,16,0.86)';ctx.fillRect(x,plY,cardW,plH);}
+    // 'minimal' — без плашки, текст ложится на саму обложку карточки (читаемость держит тень)
     // как в коллаже: название у верхней кромки плашки, цена и скидка — у нижней
     const tfs=Math.max(32*sx,12),pfs=Math.max(Math.round(48*sx),16),vpad=Math.round(10*sx);
     // QR у правого края плашки — те же правила, что в общей карточке
@@ -2608,13 +2633,13 @@ function _stTplCascade(){
     if(qrImg){const s=Math.min(Math.round(plH*0.78),Math.round(cardW*0.20));if(_stQrFits(s,sx))qrS=s;}
     const qrPadW=qrS?Math.max(2,Math.round(qrS*0.07)):0;
     const qrRes=qrS?qrS+qrPadW*2+qrGap:0;
-    ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='left';ctx.textBaseline='top';
+    ctx.save();_stTextShadow(ctx,sx);ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='left';ctx.textBaseline='top';
     const tlh=tfs*1.1;
     const tlines=_wrapLines(ctx,g.title,cardW-pad*2-qrRes,2);
     tlines.forEach((l,li)=>ctx.fillText(l,x+pad,plY+vpad+li*tlh));ctx.restore();
     const cPriceY=plY+plH-vpad-pfs;
-    if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cPriceY);ctx.restore();}
-    if(g.discount){const bfs=Math.max(Math.round(20*sx),8),bw=Math.round(70*sx),bh=Math.round(bfs*1.6),bx=x+cardW-bw-pad-qrRes,by=Math.round(cPriceY+(pfs-bh)/2);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+    if(g.priceRUB){ctx.save();_stTextShadow(ctx,sx);ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cPriceY);ctx.restore();}
+    if(g.discount){const bfs=Math.max(Math.round(20*sx),8),bw=Math.round(70*sx),bh=Math.round(bfs*1.6),bx=x+cardW-bw-pad-qrRes,by=Math.round(cPriceY+(pfs-bh)/2);ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
     if(qrS){const qx=x+cardW-pad-qrPadW-qrS,qy=plY+Math.round((plH-qrS)/2);_stDrawQr(ctx,qrImg,qx,qy,qrS);
       if(i===n-1){lastQrLeft=qx-qrPadW;lastQrTop=qy-qrPadW;lastQrBot=qy+qrS+qrPadW;}} // описание может лечь поверх нижней карточки — см. ниже
     ctx.restore();
@@ -2954,7 +2979,9 @@ function _stDrawEl(ctx,el,sel,sx,sy){
   if(el.type==='overlay'){ctx.fillStyle=el.bgColor||'rgba(0,0,0,0.6)';_stRRect(ctx,x,y,w,h,8*sx);ctx.fill();if(el.text){ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`${Math.round(el.fontSize*sx)}px '${el.fontFamily||'Noto Sans'}'`;ctx.textAlign='center';_stWrapText(ctx,el.text,x+w/2,y+h/2,w-16*sx,el.fontSize*sx*1.35);}}
   else if(el.type==='price'){ctx.fillStyle=el.bgColor||'rgba(0,112,209,0.92)';_stRRect(ctx,x,y,w,h,6*sx);ctx.fill();ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`bold ${Math.round(el.fontSize*sx)}px 'Oswald'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(el.text||'990 ₽',x+w/2,y+h/2);}
   else if(el.type==='sticker'){const r=el.shape==='pill'?h/2:el.shape==='rounded'?10*sx:3*sx;ctx.fillStyle=el.bgColor||'#e63946';_stRRect(ctx,x,y,w,h,r);ctx.fill();ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`bold ${Math.round(el.fontSize*sx)}px 'Oswald'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(el.text||'СКИДКА',x+w/2,y+h/2);}
-  else if(el.type==='logo'){if(el.imgEl){ctx.drawImage(el.imgEl,x,y,w,h);}else{ctx.globalAlpha=0.4;ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([5,4]);ctx.strokeRect(x+1,y+1,w-2,h-2);ctx.setLineDash([]);ctx.globalAlpha=0.5;ctx.fillStyle='#fff';ctx.font=`${Math.round(16*sx)}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('LOGO',x+w/2,y+h/2);}}
+  // Заглушка «LOGO» (пока URL не вставлен) раньше сбрасывала альфу в жёсткие 0.4/0.5 — из-за этого
+  // ползунок «Прозрачность» на ней не работал совсем; теперь она множится на выбранное значение.
+  else if(el.type==='logo'){const lop=el.opacity!==undefined?el.opacity:1;if(el.imgEl){ctx.drawImage(el.imgEl,x,y,w,h);}else{ctx.globalAlpha=0.4*lop;ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([5,4]);ctx.strokeRect(x+1,y+1,w-2,h-2);ctx.setLineDash([]);ctx.globalAlpha=0.5*lop;ctx.fillStyle='#fff';ctx.font=`${Math.round(16*sx)}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('LOGO',x+w/2,y+h/2);}}
   else if(el.type==='qr'){const pad=Math.round(6*sx);ctx.fillStyle='#ffffff';ctx.fillRect(x-pad,y-pad,w+pad*2,h+pad*2);if(el.imgEl){ctx.drawImage(el.imgEl,x,y,w,h);}else{ctx.fillStyle='#ccc';ctx.fillRect(x,y,w,h);ctx.fillStyle='#888';ctx.font=`${Math.round(14*sx)}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('QR',x+w/2,y+h/2);}}
   ctx.restore();
   if(sel){ctx.save();ctx.strokeStyle='#4fc3f7';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.strokeRect(x-2,y-2,w+4,h+4);ctx.setLineDash([]);ctx.fillStyle='#4fc3f7';[[x-4,y-4],[x+w,y-4],[x-4,y+h],[x+w,y+h]].forEach(([hx,hy])=>ctx.fillRect(hx,hy,8,8));ctx.restore();}
@@ -3042,6 +3069,13 @@ function _stRenderSidebar(){
   if(isSticker){html+=`<div style="margin-bottom:8px"><label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Форма</label><div style="display:flex;gap:6px">${['rect','rounded','pill'].map(sh=>`<button onclick="_stProp('shape','${sh}');_stRenderSidebar()" style="flex:1;padding:5px;border-radius:5px;border:1px solid ${e.shape===sh?'var(--blue)':'var(--border)'};background:${e.shape===sh?'rgba(0,112,209,.2)':'var(--card)'};color:${e.shape===sh?'var(--blue)':'var(--muted)'};font-size:11px;cursor:pointer">${sh==='rect'?'Прямой':sh==='rounded'?'Скруглён':'Таблетка'}</button>`).join('')}</div></div>`;}}
   html+=`<div><label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px">Позиция и размер</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${[['x','X'],['y','Y'],['w','Ш'],['h','В']].map(([k,l])=>`<div style="display:flex;align-items:center;gap:5px"><span style="font-size:10px;color:var(--muted);width:10px">${l}</span><input type="number" value="${Math.round(e[k]||0)}" oninput="_stPropN('${k}',this.value)" style="flex:1;background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:4px 6px"></div>`).join('')}</div></div>`;
   el.innerHTML=html;
+}
+// «Минимал» отличался от «Тёмной» только синей полоской в 3px и альфой 0.92 против 0.88 — замер давал
+// 0.2–1.3% пикселей, то есть третья кнопка была копией первой. Теперь это настоящий минимал: плашки нет
+// совсем, текст ложится прямо на обложку, а читаемость держится тенью под каждой надписью.
+function _stTextShadow(ctx,sx){
+  if(_stCardStyle!=='minimal')return;
+  ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=Math.max(6,Math.round(12*sx));ctx.shadowOffsetY=Math.max(1,Math.round(2*sx));
 }
 function _stHexColor(c){if(!c||c.startsWith('rgba')||c.startsWith('rgb')) return '#000000';return c;}
 // Микроправки свойств. Ползунок прозрачности и поле размера шлют oninput на каждый
