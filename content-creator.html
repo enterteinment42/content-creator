@@ -1512,6 +1512,25 @@ function _safeImgUrl(url){
   if(url.includes('api.poigraem.shop')) return url;
   return `${API}/igdb/img?url=${encodeURIComponent(url)}`;
 }
+// Сбой загрузки обложки был полностью немым: onerror ставил imgEl=null, слот оставался пустым,
+// в журнале — ни следа. Разобрать по нему жалобу «под VPN картинки в коллаже не встают» нечем:
+// непонятно даже, отваливается ли прямой адрес снапшота или прокси /igdb/img. Теперь каждый
+// промах уезжает событием error{stage:'img_load'} с адресом (base64 не тащим) и признаком прокси,
+// а в превью ещё и один общий тост на всю пачку — чтобы пустые слоты не выглядели «так и надо».
+let _imgFailN=0,_imgFailT=null;
+function _imgFail(stage,src,extra){
+  const isData=typeof src==='string'&&src.startsWith('data:');
+  let host=null,brief=null;
+  if(typeof src==='string'){
+    brief=isData?`data: (${Math.round(src.length/1024)} КБ)`:src.replace(/([?&])(_dl|_st)=\d+/g,'$1').replace(/[?&]+$/,'');
+    if(!isData){ try{ host=new URL(src,location.href).host; }catch(e){} }
+  }
+  jError('img_load',stage,Object.assign({src:brief,host,proxied:!isData&&typeof src==='string'&&src.includes('/igdb/img')},extra||{}));
+  if(!/_preview$/.test(stage)) return;
+  // Экспорт про свои промахи говорит сам («N обл. не загрузилось»), тост нужен только превью.
+  _imgFailN++;clearTimeout(_imgFailT);
+  _imgFailT=setTimeout(()=>{showToast('⚠️ Не загрузилось обложек: '+_imgFailN+'. Если включён VPN — проверь без него.',5000);_imgFailN=0;},900);
+}
 // Те же правила очистки названия для IGDB-поиска, что в основном магазине (js/admin-images.js)
 function _cleanConsoleTitle(s){
   s = s.replace(/^([^-–—]*\bEdition)\s*[-–—]\s*(.+)$/i, '$2 $1');
@@ -1538,7 +1557,12 @@ function _cleanEditionTitle(s){
     .replace(/\s*\/.*$/, '')
     .replace(/:\s*\d{4}\b.*$/, '')
     .replace(/[\s:–—-]+$/, '')
-    .replace(/\s+[A-Z]{2,3}$/, '')
+    // Хвост из 2-3 заглавных — это региональный код («Dying Light: The Beast RL»), но ровно так же
+    // выглядит номер серии: срезанная «III» превращает Modern Warfare III в Modern Warfare (2019),
+    // «VI» — GTA VI в GTA (1997), и IGDB честно отдаёт по обрубку confidence:'high'. Проверка
+    // _lowMatchOk такие матчи не ловит (она страхует только 'low'), поэтому чужая обложка вставала
+    // в коллаж молча. Римские цифры не трогаем, коды режем как раньше.
+    .replace(/\s+([A-Z]{2,3})$/, (m, w) => /^(II|III|IV|VI|VII|IX|XI|XII|XIV|XV|XX)$/.test(w) ? m : '')
     .trim();
 }
 // Лёгкая чистка названия для показа на постах/картинках/в ИИ-промптах: убирает ®/™/©, коды вида
@@ -1712,7 +1736,7 @@ function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Mat
   jAgg('slotzoom'+i,'slot_transform',{slot:i,what:'zoom',title:collageCovers[i]?.title},undefined,+collageCovers[i].transform.scale.toFixed(2),1200);}
 function clearCover(i){jEvent('used',{feature:'clearCover',slot:i,title:collageCovers[i]?.title});collageCovers[i].img=null;collageCovers[i].imgEl=null;collageCovers[i].transform=null;if(_selSlot===i){_selSlot=-1;}_updateSlotBar();renderCollageSlots();resetCanvas();}
 function handleCDrop(i,e){const f=e.dataTransfer?.files?.[0];if(!f||!f.type.startsWith('image/')) return;const r=new FileReader();r.onload=ev=>{collageCovers[i].img=ev.target.result;collageCovers[i].transform={ox:0,oy:0,scale:1};loadImgEl(i,ev.target.result,()=>{renderCollageSlots();previewCollage();});};r.readAsDataURL(f);}
-function loadImgEl(i,src,cb){const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{collageCovers[i].imgEl=img;if(cb)cb();};img.onerror=()=>{collageCovers[i].imgEl=null;if(cb)cb();};img.src=src;}
+function loadImgEl(i,src,cb){const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{collageCovers[i].imgEl=img;if(cb)cb();};img.onerror=()=>{collageCovers[i].imgEl=null;_imgFail('collage_preview',src,{slot:i,title:collageCovers[i]?.title});if(cb)cb();};img.src=src;}
 function getLayout(){return document.querySelector('input[name="layout"]:checked')?.value||'2-3';}
 function _updateLayoutRadios(n){
   const row=document.getElementById('coll-layout-row');if(!row) return;
@@ -1896,7 +1920,7 @@ function _renderCollageFull(cb){
   const gapEl=document.getElementById('coll-gap');if(gapEl)_collageGap=+gapEl.value;
   document.fonts.ready.then(()=>{
   const lay=getLayout();const{cells,W,H}=getCells(lay,collageCovers.length,2);const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
-  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
+  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
   Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(off);_collageLayout=prevLayout;_previewCells=prevCells;collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();cb(off,_failed);});
   });
 }
@@ -1959,7 +1983,7 @@ function downloadCollageFormat(fmt){
     lay=getLayout();({cells,W,H}=getCells(lay,collageCovers.length,2));
   }
   const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
-  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
+  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
   Promise.all(tasks).then(()=>{
     const src=document.createElement('canvas');src.width=W;src.height=H;
     const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(src);_collageLayout=prevLayout;_previewCells=prevCells;
@@ -2908,7 +2932,7 @@ async function _pickerIgdbSearch(){
 }
 
 function _stInitCanvas(){_stCanvas.width=720;_stCanvas.height=1280;}
-function _stLoadImgs(){_stG.forEach(g=>{if(!g.imgUrl) return;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.onerror=()=>{g.imgEl=null;_stRedrawCurrent();};img.src=g.imgUrl;});_stRedrawCurrent();}
+function _stLoadImgs(){_stG.forEach(g=>{if(!g.imgUrl) return;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.onerror=()=>{g.imgEl=null;_imgFail('story_preview',g.imgUrl,{title:g.title});_stRedrawCurrent();};img.src=g.imgUrl;});_stRedrawCurrent();}
 function _stRedrawCurrent(){if(_stMode==='templates')_stRenderTemplate();else _stRender();}
 function _stRender(){
   if(!_stCtx) return;const ctx=_stCtx;const cw=_stCanvas.width,ch=_stCanvas.height;
@@ -3122,7 +3146,7 @@ function downloadStory(){
   showToast('Подготовка...');
   document.fonts.ready.then(()=>{
   const origG=_stG.map(g=>g.imgEl);const origEls=_stEls.map(el=>el.imgEl);const tasks=[];let _failed=0;const _shownN=Math.min(_stGameCount,3);
-  _stG.forEach((g,idx)=>tasks.push(new Promise(resolve=>{if(!g.imgUrl){resolve();return;}const img=new Image();const isData=g.imgUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;resolve();};img.onerror=()=>{g.imgEl=null;if(idx<_shownN)_failed++;resolve();};img.src=isData?g.imgUrl:g.imgUrl+(g.imgUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
+  _stG.forEach((g,idx)=>tasks.push(new Promise(resolve=>{if(!g.imgUrl){resolve();return;}const img=new Image();const isData=g.imgUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;resolve();};img.onerror=()=>{g.imgEl=null;if(idx<_shownN)_failed++;_imgFail('story_export',g.imgUrl,{title:g.title});resolve();};img.src=isData?g.imgUrl:g.imgUrl+(g.imgUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
   if(_stMode==='editor')_stEls.filter(el=>(el.type==='logo'||el.type==='qr')&&el.logoUrl).forEach(el=>tasks.push(new Promise(resolve=>{const img=new Image();const isData=el.logoUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{el.imgEl=img;resolve();};img.onerror=()=>{el.imgEl=null;resolve();};img.src=isData?el.logoUrl:el.logoUrl+(el.logoUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
   else if(_stLogoUrl&&_stLogoPos!=='none')tasks.push(new Promise(resolve=>{const img=new Image();const isData=_stLogoUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{_stLogoImg=img;resolve();};img.onerror=resolve;img.src=isData?_stLogoUrl:_stLogoUrl+((_stLogoUrl.includes('?')?'&':'?')+'_st='+Date.now());}));
   // QR-коды шаблона: без предзагрузки в PNG уедет сторис без кода (ленивая загрузка не успеет)
