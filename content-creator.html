@@ -976,7 +976,7 @@ function _brandApplyLive() {
   _stDescOn = localStorage.getItem('cc_desc_on') !== '0';
   _stQrOn = localStorage.getItem('cc_qr_on') !== '0';
   _stImgFilter = localStorage.getItem('cc_img_filter') || 'none';
-  _stImgFilterAmt = Math.min(1, Math.max(0, (+localStorage.getItem('cc_img_filter_amt') || 70) / 100));
+  _stImgFilterAmt = _stReadFilterAmt();
   _stLogoImg = null; _collageLogoImg = null;
   if (_stLogoUrl) { const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { _stLogoImg = img; if (document.getElementById('story-modal')?.classList.contains('open')) _stRedrawCurrent(); }; img.src = _stLogoUrl; }
   loadTgTemplate();
@@ -2185,9 +2185,13 @@ function _stCornerQr(ctx,cw,ch,g){
 // Сужать описание под код имеет смысл только там, где полосы реально пересекаются по вертикали:
 // иначе текст обрезался бы многоточием на ровном месте — описание либо выше кода (Горизонт с одной
 // игрой), либо ниже него (Каскад с одной игрой: код в плашке карточки, описание под карточкой).
-function _stDescHitsQr(ctx,g,y,qrTop,qrBot,w){
+// maxLines обязателен там, где шаблон рисует описание с собственным потолком строк («Веер»,
+// «Каскад» считают его через _stDescLinesFor). Без него замер шёл по четырём строкам, завышенный
+// barH сильнее поднимался клампом и «попадал» в полосу кода — описание сужалось и резалось
+// многоточием там, где реальный двухстрочный блок кода не касается.
+function _stDescHitsQr(ctx,g,y,qrTop,qrBot,w,maxLines){
   if(!_stDescOn||!g||!_stShortDescs[g.title])return false;
-  const bh=_stDrawDescZone(ctx,0,0,w,g,true);
+  const bh=_stDrawDescZone(ctx,0,0,w,g,true,maxLines);
   if(!bh)return false;
   const yy=Math.max(0,Math.min(y,ctx.canvas.height-bh));
   return yy<qrBot&&yy+bh>qrTop;
@@ -2291,11 +2295,26 @@ function _sampleImgColor(img){
 // Авто-контраст текста: средняя яркость обложки (0-255), кэш по img.src. Используется там, где
 // заголовок ложится прямо на сырую картинку без тёмной подложки (см. _stTplHorizon).
 const _lumaCache={};
+// Во что превращает замеренную яркость активный фильтр обложки. Считаем только то, что реально
+// двигает светлоту: затемнение, виньетку (в центре кадра она слабее края — берём умеренную долю)
+// и контраст, растаскивающий значения от середины. Ч-б/тёплый/холодный светлоту почти не трогают.
+function _stLumaAfterFilter(l){
+  const f=_stImgFilterDef(),a=_stImgFilterAmt;
+  if(!f||a<=0)return l;
+  if(f.id==='dark')return l*(1-0.55*a);
+  if(f.id==='vignette')return l*(1-0.30*a);
+  if(f.id==='contrast')return Math.max(0,Math.min(255,128+(l-128)*(1+0.45*a)));
+  return l;
+}
 function _stTextIsDark(img,y0,y1){
   if(!img||!img.src) return false;
   // CC-9: если задана полоса [y0..y1] (доли высоты) — меряем яркость только её, а не всей обложки:
   // заголовок может стоять на локально светлом участке глобально тёмной картинки.
-  const key=y0!=null?`${img.src}:${y0}:${y1}`:img.src;
+  // Фильтр обложки входит в ключ и в расчёт: яркость меряется по СЫРОЙ картинке, а «Затемнение»
+  // кладёт поверх до rgba(0,0,0,0.55). Без поправки светлая обложка с затемнением на 100% давала
+  // dark=true — тёмный заголовок на уже затемнённой картинке, то есть текст пропадал и в PNG.
+  const fKey=_stImgFilter==='none'?'':`:${_stImgFilter}:${Math.round(_stImgFilterAmt*100)}`;
+  const key=(y0!=null?`${img.src}:${y0}:${y1}`:img.src)+fKey;
   if(_lumaCache[key]!==undefined) return _lumaCache[key];
   let dark=false;
   try{
@@ -2306,7 +2325,7 @@ function _stTextIsDark(img,y0,y1){
     const data=cx.getImageData(0,0,S,S).data;
     let sum=0,n=0;
     for(let i=0;i<data.length;i+=4){sum+=0.299*data[i]+0.587*data[i+1]+0.114*data[i+2];n++;}
-    if(n) dark=(sum/n)>165; // светлая обложка → тёмный текст вместо белого
+    if(n) dark=_stLumaAfterFilter(sum/n)>165; // светлая обложка → тёмный текст вместо белого
   }catch(e){}
   _lumaCache[key]=dark;
   return dark;
@@ -2419,7 +2438,10 @@ const _ST_IMG_FILTERS=[
   {id:'dark',    label:'Затемнение', overlay:'dark'},
 ];
 let _stImgFilter=localStorage.getItem('cc_img_filter')||'none';
-let _stImgFilterAmt=Math.min(1,Math.max(0,(+localStorage.getItem('cc_img_filter_amt')||70)/100));
+// Через `|| 70` сохранённый ноль («Сила 0%») терялся: +"0" ложно, и после перезагрузки или
+// применения пресета бренда ползунок сам возвращался на 70%.
+function _stReadFilterAmt(){const v=localStorage.getItem('cc_img_filter_amt');const n=v==null||v===''?70:+v;return Math.min(1,Math.max(0,(isNaN(n)?70:n)/100));}
+let _stImgFilterAmt=_stReadFilterAmt();
 function _stImgFilterDef(){return _ST_IMG_FILTERS.find(f=>f.id===_stImgFilter)||_ST_IMG_FILTERS[0];}
 function _stImgFilterOverlay(ctx,x,y,w,h,f,a){
   if(w<=0||h<=0)return;
@@ -2910,9 +2932,10 @@ function _stTplCascade(){
   }
   if(_stDescOn){
     const dg=Math.min(_stDescGame,n-1),descY=startY+(n-1)*step+cardH+Math.round(ch*.015);
+    const dLines=_stDescLinesFor(ctx,descY);
     // При n=1 описание ложится ПОД карточкой и кода не касается — сужать его там нечего.
-    const descW=_stDescHitsQr(ctx,_stG[dg],descY,lastQrTop,lastQrBot,cw)?Math.max(Math.round(cw*0.5),lastQrLeft-Math.round(12*sx)):cw;
-    _stDrawDescZone(ctx,0,descY,descW,_stG[dg],false,_stDescLinesFor(ctx,descY));
+    const descW=_stDescHitsQr(ctx,_stG[dg],descY,lastQrTop,lastQrBot,cw,dLines)?Math.max(Math.round(cw*0.5),lastQrLeft-Math.round(12*sx)):cw;
+    _stDrawDescZone(ctx,0,descY,descW,_stG[dg],false,dLines);
   }
 }
 // Размер и отступ логотипа — те же правила, что у водяного знака коллажа (13% меньшей стороны),
@@ -3291,9 +3314,19 @@ function _stCornerHit(el,cx,cy){
   }
   return null;
 }
+// Панорама обложки работает в обоих режимах, а элементы есть только в редакторе. Раньше клик по
+// превью в режиме «Шаблоны» всё равно шёл по ветке элементов и звал _stRender() — рендерер
+// РЕДАКТОРА: шаблон подменялся плоской раскладкой слотов и оставался таким до следующей
+// перерисовки. Тот же дефект, что был у квадратиков фона, только через мышь.
+function _stStartBgDrag(cx,cy){
+  const slotH=STORY_H/_stGameCount,slotIdx=Math.min(Math.floor(cy/slotH),_stGameCount-1),g=_stG[slotIdx];
+  if(g&&g.imgEl&&(!g.bg||g.bg==='image'))_stDrag={on:true,type:'bg',idx:slotIdx,ox:cx,oy:cy,t0ox:g.transform.ox,t0oy:g.transform.oy};
+  else _stDrag={on:false,type:'',idx:-1,ox:0,oy:0,t0ox:0,t0oy:0};
+}
 function _stOnMouseDown(e){const{cx,cy}=_stCanvasXY(e);_stActiveSlot=Math.max(0,Math.min(Math.floor(cy/(STORY_H/_stGameCount)),_stGameCount-1));
+  if(_stMode!=='editor'){_stStartBgDrag(cx,cy);return;}
   if(_stSel>=0&&_stEls[_stSel]){const corner=_stCornerHit(_stEls[_stSel],cx,cy);if(corner){_stDrag={on:true,type:'resize',idx:_stSel,corner,ox:0,oy:0,t0ox:0,t0oy:0};return;}}
-  let hit=-1;for(let i=_stEls.length-1;i>=0;i--){const el=_stEls[i];if(cx>=el.x&&cx<=el.x+el.w&&cy>=el.y&&cy<=el.y+el.h){hit=i;break;}}_stSel=hit;_stRender();_stRenderSidebar();if(hit>=0){const el=_stEls[hit];_stDrag={on:true,type:'el',idx:hit,ox:cx-el.x,oy:cy-el.y,t0ox:0,t0oy:0};}else{const slotH=STORY_H/_stGameCount;const slotIdx=Math.min(Math.floor(cy/slotH),_stGameCount-1);const g=_stG[slotIdx];if(g&&g.imgEl&&(!g.bg||g.bg==='image')){_stDrag={on:true,type:'bg',idx:slotIdx,ox:cx,oy:cy,t0ox:g.transform.ox,t0oy:g.transform.oy};}else{_stDrag={on:false,type:'',idx:-1,ox:0,oy:0,t0ox:0,t0oy:0};}}}
+  let hit=-1;for(let i=_stEls.length-1;i>=0;i--){const el=_stEls[i];if(cx>=el.x&&cx<=el.x+el.w&&cy>=el.y&&cy<=el.y+el.h){hit=i;break;}}_stSel=hit;_stRender();_stRenderSidebar();if(hit>=0){const el=_stEls[hit];_stDrag={on:true,type:'el',idx:hit,ox:cx-el.x,oy:cy-el.y,t0ox:0,t0oy:0};}else _stStartBgDrag(cx,cy);}
 function _stOnMouseMove(e){if(!_stDrag.on) return;const{cx,cy}=_stCanvasXY(e);if(_stDrag.type==='el'){const el=_stEls[_stDrag.idx];if(!el) return;el.x=Math.max(0,Math.min(STORY_W-el.w,cx-_stDrag.ox));el.y=Math.max(0,Math.min(STORY_H-el.h,cy-_stDrag.oy));}else if(_stDrag.type==='resize'){const el=_stEls[_stDrag.idx];if(!el) return;const MIN=40,c=_stDrag.corner;if(c.includes('e'))el.w=Math.max(MIN,Math.min(STORY_W-el.x,cx-el.x));if(c.includes('s'))el.h=Math.max(MIN,Math.min(STORY_H-el.y,cy-el.y));if(c.includes('w')){const r=el.x+el.w;el.x=Math.max(0,Math.min(cx,r-MIN));el.w=r-el.x;}if(c.includes('n')){const b=el.y+el.h;el.y=Math.max(0,Math.min(cy,b-MIN));el.h=b-el.y;}}else if(_stDrag.type==='bg'){const g=_stG[_stDrag.idx];if(!g) return;g.transform.ox=_stDrag.t0ox+(cx-_stDrag.ox);g.transform.oy=_stDrag.t0oy+(cy-_stDrag.oy);}_stRedrawCurrent();}
 function _stOnMouseUp(){if(_stDrag.type==='resize')_stRenderSidebar();_stDrag.on=false;}
 function _stOnWheel(e){e.preventDefault();const{cy}=_stCanvasXY(e);const slotH=STORY_H/_stGameCount;const slotIdx=Math.min(Math.floor(cy/slotH),_stGameCount-1);_stActiveSlot=Math.max(0,slotIdx);const g=_stG[slotIdx];if(!g||!g.imgEl) return;g.transform.scale=Math.max(0.3,Math.min(4,g.transform.scale+(e.deltaY>0?-0.08:0.08)));_stRedrawCurrent();}
@@ -3334,10 +3367,21 @@ function _stSyncHistBtns(){
 // клонировал», и «QR в редакторе аж 4 штуки» (на канвасе один код, в списке четыре строки).
 // Каждый следующий элемент сдвигаем лесенкой и держим в пределах кадра.
 function _stElSpawn(el,x,y){
-  const STEP=56;let k=0;
-  while(k<14&&_stEls.some(e=>Math.abs(e.x-(x+k*STEP))<10&&Math.abs(e.y-(y+k*STEP))<10))k++;
-  el.x=Math.max(0,Math.min(STORY_W-el.w,x+k*STEP));
-  el.y=Math.max(0,Math.min(STORY_H-el.h,y+k*STEP));
+  const STEP=56;
+  // Сравниваем ИТОГОВЫЕ (обрезанные кадром) координаты, а не кандидата до обрезки: иначе у края
+  // кадра лесенка упиралась в кламп, разница кандидата с уже лежащим элементом оставалась большой,
+  // и очередной элемент ложился пиксель в пиксель поверх предыдущего — ровно тот невидимый дубль,
+  // ради которого хелпер и писался (видно с шестого нажатия «QR»).
+  const clampX=v=>Math.max(0,Math.min(STORY_W-el.w,v)),clampY=v=>Math.max(0,Math.min(STORY_H-el.h,v));
+  const busy=(px,py)=>_stEls.some(e=>Math.abs(e.x-px)<10&&Math.abs(e.y-py)<10);
+  // Лесенка идёт вперёд, а упёршись в край кадра — назад: у правого нижнего угла кламп иначе
+  // схлопывает все дальнейшие шаги в одну точку.
+  let cx=clampX(x),cy=clampY(y);
+  for(const o of [0,1,2,3,4,5,6,-1,-2,-3,-4,-5,-6]){
+    const tx=clampX(x+o*STEP),ty=clampY(y+o*STEP);
+    if(!busy(tx,ty)){cx=tx;cy=ty;break;}
+  }
+  el.x=cx;el.y=cy;
   return el;
 }
 function _stPushEl(el){_stEls.push(el);_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
@@ -3348,7 +3392,12 @@ function _stLoadElImg(el,url){
   const img=new Image();
   if(!url.startsWith('data:'))img.crossOrigin='anonymous';
   img.onload=()=>{el.imgEl=img;_stRender();};
-  img.onerror=()=>{el.imgEl=null;_imgFail('story_el_img',url,{elType:el.type});if(el.type==='qr')showToast('Не удалось загрузить QR');_stRender();};
+  // Провал должен быть виден на экране, а не только в журнале: у логотипа по чужому URL
+  // crossOrigin обязателен (иначе лого молча пропадёт из PNG), но без подсказки человек видит
+  // просто пустое место и не понимает, что хост не отдаёт CORS-заголовки.
+  img.onerror=()=>{el.imgEl=null;_imgFail('story_el_img',url,{elType:el.type});
+    showToast(el.type==='qr'?'Не удалось загрузить QR':'Логотип не загрузился — возможно, хост не отдаёт CORS-заголовки');
+    _stRender();};
   img.src=url;
 }
 function stAddOverlay(){jEvent('el_add',{type:'overlay',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stPushEl(_stElSpawn({type:'overlay',w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1},80,1400));}
@@ -3450,7 +3499,18 @@ function _stProp(k,v){if(_stSel<0) return;_jProp(k,v);_stEls[_stSel][k]=v;_stRen
 function _stPropN(k,v){if(_stSel<0) return;_jProp(k,parseFloat(v));_stEls[_stSel][k]=parseFloat(v);_stRender();}
 function _stPropBg(v){if(_stSel<0) return;_jProp('bgColor',v);_stEls[_stSel].bgColor=v;_stRender();}
 function _stBgColor(hex){if(_stSel<0) return;_jProp('bgColor',hex);_stEls[_stSel].bgColor=hex;const inp=document.querySelector('#st-props input[type="text"][oninput="_stPropBg(this.value)"]');if(inp)inp.value=hex;_stRender();}
-function _stSetLogoUrl(url){if(_stSel<0) return;const el=_stEls[_stSel];if(el.type!=='logo') return;el.logoUrl=url;if(url){_stLoadElImg(el,url);}else{el.imgEl=null;_stRender();}}
+// Поле висит на oninput. Без задержки КАЖДАЯ набранная буква давала неудачную загрузку, а _imgFail
+// кладёт хост в ключ глушилки jError — то есть набор одного адреса писал на сервер два десятка
+// error{stage:'img_load'} с обрывками URL и забивал ровно ту выборку, по которой в сессии 66
+// собирались искать причину сбоев под VPN. Грузим, когда человек перестал печатать.
+let _stLogoUrlTimer=null;
+function _stSetLogoUrl(url){
+  if(_stSel<0) return;const el=_stEls[_stSel];if(el.type!=='logo') return;
+  el.logoUrl=url;
+  clearTimeout(_stLogoUrlTimer);
+  if(!url){el.imgEl=null;_stRender();return;}
+  _stLogoUrlTimer=setTimeout(()=>{if(el.logoUrl===url)_stLoadElImg(el,url);},700);
+}
 // ── NEW Template: Горизонт ────────────────────────────────
 function _stTplHorizon(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height,sx=cw/STORY_W;
