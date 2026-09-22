@@ -829,6 +829,9 @@ try {
 } catch(e){ console.warn('[journal] обработчики не навешаны:', e && e.message); }
 
 // ── Snapshot ──────────────────────────────────────────────
+// Ключ для сопоставления названия игры со словарём описаний: убираем ™/®/© и лишние пробелы,
+// регистр не важен. Здесь же ловится «EA SPORTS FC™ 27» → «EA SPORTS FC 27».
+function _descKey(s) { return String(s || '').replace(/[™®©]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase(); }
 async function loadSnapshot() {
   document.getElementById('loading').style.display = 'flex';
   document.getElementById('main').style.display = 'none';
@@ -838,7 +841,17 @@ async function loadSnapshot() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     const snap = typeof data.data === 'string' ? JSON.parse(data.data) : (data.data || data);
-    games = (snap.games || []).filter(g => !g.hidden).map(g => ({...g, _sel: false}));
+    // Описания лежат ОТДЕЛЬНЫМ словарём snap.descriptions (название → текст), а не полем игры.
+    // Пока их не подцепляли, g.description был пуст у всех: «Из архива» всегда 0, колонка 📝 всегда
+    // тусклая, в промпт не уходило ни слова контекста — модель каждый раз угадывала суть по названию,
+    // а при сбое генерации пост выходил пустым. Ключ ищем точный, затем по нормализованному
+    // названию (™/®/двойные пробелы) и по вычищенному _displayTitle. Фаззи-поиска нет намеренно:
+    // подставить чужое описание хуже, чем не найти своё.
+    const _descMap = {};
+    Object.entries(snap.descriptions || {}).forEach(([k, v]) => { if (typeof v === 'string' && v.trim()) _descMap[_descKey(k)] = v.trim(); });
+    const _descFor = t => (snap.descriptions || {})[t] || _descMap[_descKey(t)] || _descMap[_descKey(_displayTitle(t))] || '';
+    games = (snap.games || []).filter(g => !g.hidden).map(g => ({...g, description: (g.description && String(g.description).trim()) || _descFor(g.title), _sel: false}));
+    jEvent('used', { feature: 'snapshotDescs', games: games.length, withDesc: games.filter(g => g.description).length });
     _mergeCustomItems(); // свои товары (консоли и т.п.) живут в localStorage и переживают обновление снапшота
     const ts = data.updated_at || data.ts;
     if (ts) document.getElementById('snapshot-date').textContent = 'Обновлено: ' + new Date(ts).toLocaleString('ru', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
