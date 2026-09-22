@@ -153,7 +153,13 @@
     }
     /* ── Story ── */
     .st-body { display: flex; gap: 16px; padding: 12px 18px; }
-    #st-canvas { width: 320px; height: auto; display: block; }
+    /* Превью НЕ должно ужиматься флексом. У обёртки overflow:hidden, и при окне ниже ~880px левая
+       колонка не помещалась в тело модалки: канвас 569px сжимался (замер: 820px окна → срез 70px,
+       760 → 127px, 700 → 183px), а срезается именно НИЗ кадра — название, цена и QR. В PNG при этом
+       всё на месте, то есть человек правит по картинке, которой не видит целиком.
+       Поэтому: обёртка не сжимается, а сам канвас вписывается в доступную высоту окна. */
+    #st-canvas-wrap { flex-shrink: 0; }
+    #st-canvas { width: auto; height: clamp(280px, calc(94vh - 330px), 569px); max-width: 100%; display: block; }
     /* Мобильная сторис: канвас ограничен по высоте (не 100% ширины), иначе он занимает весь экран
        и с touch-action:none перехватывает все касания — до панелей «Шаблоны»/«Редактор» ниже не доскроллить */
     /* Панели «Шаблоны»/«Редактор» на десктопе — колонки со своим скроллом (flex:1 + overflow-y:auto).
@@ -325,7 +331,7 @@
         </div>
         <div id="st-canvas-wrap" style="position:relative;border:2px solid var(--border);border-radius:8px;overflow:hidden;background:#0e0e1c;line-height:0">
           <canvas id="st-canvas" onmousedown="_stOnMouseDown(event)" onmousemove="_stOnMouseMove(event)" onmouseup="_stOnMouseUp()" onmouseleave="_stOnMouseUp()" onwheel="_stOnWheel(event)" ontouchstart="_stOnTouchStart(event)" ontouchmove="_stOnTouchMove(event)" ontouchend="_stOnTouchEnd()" style="display:block;cursor:crosshair;touch-action:none"></canvas>
-          <div id="st-canvas-hint" style="position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:9px;color:rgba(255,255,255,.3);pointer-events:none">Тяни фон = панорама · колёсико = зум · Del = удалить · Ctrl+Z = отменить</div>
+          <div id="st-canvas-hint" style="position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:9px;color:rgba(255,255,255,.3);pointer-events:none">Тяни фон = панорама · колёсико = зум · Del = удалить · Ctrl+Z = отменить · Ctrl+Shift+Z = вернуть</div>
         </div>
         <div>
           <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Игры в сторис</div>
@@ -354,11 +360,16 @@
         <!-- BG style -->
         <div>
           <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Фон шаблона</div>
-          <div style="display:flex;gap:5px">
-            <button id="st-bg-dark" onclick="_stSetBgStyle('dark')" style="flex:1;padding:5px 4px;border-radius:5px;border:1px solid var(--blue);background:rgba(0,112,209,.2);color:var(--blue);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Тёмный</button>
-            <button id="st-bg-blur" onclick="_stSetBgStyle('blur')" style="flex:1;padding:5px 4px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Blur-цвет</button>
-            <button id="st-bg-glow" onclick="_stSetBgStyle('glow')" style="flex:1;padding:5px 4px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Glow</button>
-            <button id="st-bg-grain" onclick="_stSetBgStyle('grain')" style="flex:1;padding:5px 4px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Зерно</button>
+          <div id="st-bg-btns" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+        </div>
+        <!-- Cover filter -->
+        <div>
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Фильтр обложки</div>
+          <div id="st-imgf-btns" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+          <div id="st-imgf-amt-row" style="display:none;align-items:center;gap:7px;margin-top:6px">
+            <span style="font-size:10px;color:var(--muted)">Сила</span>
+            <input type="range" id="st-imgf-amt" min="0" max="100" step="5" oninput="_stSetImgFilterAmt(this.value)" style="flex:1;accent-color:var(--blue);cursor:pointer">
+            <span id="st-imgf-amt-val" style="font-size:10px;color:var(--muted);min-width:32px;text-align:right">70%</span>
           </div>
         </div>
         <!-- Logo URL -->
@@ -400,6 +411,11 @@
 
       <!-- EDITOR PANEL -->
       <div id="st-editor-panel" style="display:none;flex-direction:column;gap:12px">
+        <!-- История правок: Ctrl+Z был единственным способом откатить, а вернуть откат было нечем -->
+        <div style="display:flex;gap:6px">
+          <button id="st-undo-btn" onclick="stUndo()" title="Отменить последнее действие (Ctrl+Z)" style="flex:1;padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;cursor:pointer;font-family:'Oswald',sans-serif">↶ Отменить</button>
+          <button id="st-redo-btn" onclick="stRedo()" title="Вернуть отменённое (Ctrl+Shift+Z или Ctrl+Y)" style="flex:1;padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;cursor:pointer;font-family:'Oswald',sans-serif">↷ Вернуть</button>
+        </div>
         <div>
           <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Добавить элемент</div>
           <div style="display:flex;flex-direction:column;gap:6px">
@@ -905,7 +921,7 @@ function removeCustomItem(cid) {
 // ── Пресеты бренда ─────────────────────────────────────────
 // Именованный снимок всех «брендовых» localStorage-ключей: шапка/подвал поста, лого (URL/позиция/
 // форма), цвета коллажа, фоны, шаблон сторис. Разные каналы (PS-игры / консоли / …) — разные пресеты.
-const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on'];
+const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on','cc_img_filter','cc_img_filter_amt'];
 function _brandList() { try { return JSON.parse(localStorage.getItem('cc_brand_presets') || '{}'); } catch(_) { return {}; } }
 function _brandRenderSel() {
   const sel = document.getElementById('brand-sel'); if (!sel) return;
@@ -946,6 +962,8 @@ function _brandApplyLive() {
   _stTplId = localStorage.getItem('cc_tpl_id') || 'cards';
   _stDescOn = localStorage.getItem('cc_desc_on') !== '0';
   _stQrOn = localStorage.getItem('cc_qr_on') !== '0';
+  _stImgFilter = localStorage.getItem('cc_img_filter') || 'none';
+  _stImgFilterAmt = Math.min(1, Math.max(0, (+localStorage.getItem('cc_img_filter_amt') || 70) / 100));
   _stLogoImg = null; _collageLogoImg = null;
   if (_stLogoUrl) { const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { _stLogoImg = img; if (document.getElementById('story-modal')?.classList.contains('open')) _stRedrawCurrent(); }; img.src = _stLogoUrl; }
   loadTgTemplate();
@@ -1734,7 +1752,8 @@ document.addEventListener('keydown',e=>{
   }
   if(document.getElementById('story-modal')?.classList.contains('open')&&_stMode==='editor'&&!typing){
     if((e.key==='Delete'||e.key==='Backspace')&&_stSel>=0){e.preventDefault();stDeleteSel();return;}
-    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();stUndo();return;}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();if(e.shiftKey)stRedo();else stUndo();return;}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();stRedo();return;}
   }
 });
 function drawSlot(i){const canvas=document.getElementById(`sc-${i}`);if(!canvas) return;const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#0e0e1c';ctx.fillRect(0,0,W,H);if(!collageCovers[i].imgEl) return;initT(i);const t=collageCovers[i].transform,img=collageCovers[i].imgEl;const cell=_previewCells[i];const sx=cell?W/cell.w:1,sy=cell?H/cell.h:1;const base=Math.max(W/img.naturalWidth,H/img.naturalHeight);const s=base*t.scale;ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();ctx.drawImage(img,(W-img.naturalWidth*s)/2+t.ox*sx,(H-img.naturalHeight*s)/2+t.oy*sy,img.naturalWidth*s,img.naturalHeight*s);ctx.restore();}
@@ -1873,11 +1892,41 @@ function _drawFigPriceChip(ctx,bx,by,chipW,chipH,fs,cv){
   ctx.fillStyle='#f0c040';ctx.fillText(priceStr,bx+Math.round(fs*0.5),by+chipH/2);
   if(discStr){ctx.font=`700 ${dfs}px Arial,sans-serif`;ctx.fillStyle='#ff6a4d';ctx.fillText(discStr,bx+Math.round(fs*0.5)+tw+Math.round(fs*0.4),by+chipH/2);}
 }
-function _wrapLines(ctx,text,maxW,maxLines){
-  maxLines=maxLines||2;
-  const words=text.split(' '),lines=[];let line='';
+// Разбивка на строки без ограничения — основа и для _wrapLines, и для _fitLines.
+function _splitLines(ctx,text,maxW){
+  const words=String(text||'').split(/\s+/).filter(Boolean),lines=[];let line='';
   for(const w of words){const t=line?line+' '+w:w;if(ctx.measureText(t).width>maxW&&line){lines.push(line);line=w;}else line=t;}
   if(line)lines.push(line);
+  return lines;
+}
+// Текст на картинке резался жёстко двумя строками: описание из четырёх строк теряло половину во всех
+// восьми шаблонах. Теперь блок растёт под текст, а если упирается в отведённое место — кегль плавно
+// уменьшается до предела читаемости, и только если и этого мало, ставится «…».
+// Возвращает {lines, fs, lh, h} — вызывающий верстает от РЕАЛЬНОЙ высоты блока.
+function _fitLines(ctx,text,maxW,o){
+  const font=o.font,lhK=o.lh||1.3,maxLines=o.maxLines||99,minFs=Math.max(8,o.minFs||o.fs*0.7);
+  let fs=o.fs;
+  for(let guard=0;guard<24;guard++){
+    ctx.font=font(fs);
+    const ls=_splitLines(ctx,text,maxW);
+    if(ls.length<=maxLines||fs<=minFs+0.01){
+      if(ls.length>maxLines){
+        ls.length=maxLines;
+        let last=ls[maxLines-1];
+        while(ctx.measureText(last+'…').width>maxW&&last.length>1)last=last.slice(0,-1);
+        ls[maxLines-1]=last.replace(/\s+$/,'')+'…';
+      }
+      return {lines:ls,fs,lh:fs*lhK,h:ls.length*fs*lhK};
+    }
+    fs=Math.max(minFs,fs*0.93);
+  }
+  ctx.font=font(fs);
+  const ls=_splitLines(ctx,text,maxW);
+  return {lines:ls,fs,lh:fs*lhK,h:ls.length*fs*lhK};
+}
+function _wrapLines(ctx,text,maxW,maxLines){
+  maxLines=maxLines||2;
+  const lines=_splitLines(ctx,text,maxW);
   if(lines.length>maxLines){
     lines.length=maxLines;
     let last=lines[maxLines-1];
@@ -2016,7 +2065,7 @@ function downloadCollageFormat(fmt){
 
 // ── STORY ──────────────────────────────────────────────────
 const STORY_W=1080,STORY_H=1920;
-let _stG=[];let _stEls=[];let _stSel=-1;let _stUndoStack=[];
+let _stG=[];let _stEls=[];let _stSel=-1;let _stUndoStack=[];let _stRedoStack=[];
 let _stCanvas=null,_stCtx=null;
 let _stDrag={on:false,type:'',idx:-1,ox:0,oy:0,t0ox:0,t0oy:0};
 let _stGameCount=1;
@@ -2151,7 +2200,20 @@ const _ST_TPLS=[
   {id:'horizon', label:'Горизонт'},
   {id:'neon',    label:'Неон'},
 ];
-const _ST_BG={image:{colors:null},dark:{colors:['#1a1a2e','#0e0e1c']},light:{colors:['#d8dff0','#b0bad4']},blue:{colors:['#0a2d7a','#1255c4']},purple:{colors:['#280a50','#6a1b9a']},red:{colors:['#7a1010','#c42828']}};
+// Квадратики в строке игры раньше давали плоскую заливку (тёмный/светлый/синий/фиолетовый/красный),
+// и это была единственная альтернатива обложке: «вместо картинки сплошной цвет». Хуже того, шаблоны
+// поле g.bg вообще не читали — клик звал _stRender() (рендерер РЕДАКТОРА) и подменял им весь кадр,
+// а следующая перерисовка шаблона возвращала всё назад. Теперь это выбор процедурного фона,
+// который рисуется кодом и работает и в шаблонах, и в редакторе.
+const _ST_SLOT_BG=[
+  {id:'image', label:'Обложка',  css:'linear-gradient(135deg,#6a6a8a,#b8b8d0)'},
+  {id:'night', label:'Ночь',     css:'linear-gradient(to bottom,#12122a,#060614)'},
+  {id:'rays',  label:'Лучи',     css:'repeating-linear-gradient(115deg,#12122a 0 4px,#2a2a46 4px 7px)'},
+  {id:'grid',  label:'Сетка',    css:'repeating-linear-gradient(0deg,#12122a 0 4px,#2e2e4c 4px 5px),repeating-linear-gradient(90deg,#12122a 0 4px,#2e2e4c 4px 5px)'},
+  {id:'blobs', label:'Пятна',    css:'radial-gradient(circle at 30% 30%,#4a3aa0,#0c0c1e 70%)'},
+  {id:'radial',label:'Градиент', css:'radial-gradient(circle at 50% 35%,#3a5ac0,#06060f 75%)'},
+];
+const _ST_SLOT_BG_IDS=new Set(_ST_SLOT_BG.map(b=>b.id));
 
 // ── Story Mode & Template ─────────────────────────────────
 function _stSetMode(mode){
@@ -2192,8 +2254,7 @@ function _stSetCardStyle(s){
 function _stSetBgStyle(s){
   if(_stBgStyle!==s)jEvent('used',{feature:'storyBgStyle',from:_stBgStyle,to:s});
   _stBgStyle=s;localStorage.setItem('cc_st_bg_style',s);
-  ['dark','blur','glow','grain'].forEach(k=>{const b=document.getElementById('st-bg-'+k);if(!b)return;const on=k===s;b.style.border='1px solid '+(on?'var(--blue)':'var(--border)');b.style.background=on?'rgba(0,112,209,.2)':'var(--card)';b.style.color=on?'var(--blue)':'var(--muted)';});
-  _stRenderTemplate();
+  _stRenderTemplate(); // подсветку кнопок перерисовывает _stSyncBgBtns внутри
 }
 let _glowColorCache={};
 function _sampleImgColor(img){
@@ -2263,9 +2324,121 @@ function _stRenderTemplateBg(ctx,cw,ch,g){
     const g1=ctx.createRadialGradient(cw*.10,ch*.12,0,cw*.10,ch*.12,cw*.90);g1.addColorStop(0,gc+'0.52)');g1.addColorStop(.45,gc+'0.14)');g1.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g1;ctx.fillRect(0,0,cw,ch);
     const g2=ctx.createRadialGradient(cw*.88,ch*.78,0,cw*.88,ch*.78,cw*.55);g2.addColorStop(0,gc+'0.30)');g2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=g2;ctx.fillRect(0,0,cw,ch);return;
   }
-  const grd=ctx.createLinearGradient(0,0,0,ch);grd.addColorStop(0,'#12122a');grd.addColorStop(1,'#060614');ctx.fillStyle=grd;ctx.fillRect(0,0,cw,ch);
+  // Процедурные фоны (Лучи/Сетка/Пятна/Градиент) — тот же набор, что у квадратиков слота
+  if(_ST_PROC_KINDS.has(_stBgStyle)){_stProcBg(ctx,_stBgStyle,0,0,cw,ch,g);return;}
+  _stProcBg(ctx,'night',0,0,cw,ch,g);
   // Зерно здесь больше не накладываем: оно стало фильтром всего кадра (см. _stRenderTemplate),
   // иначе в «Веере» и «Каскаде» шум лёг бы дважды.
+}
+// ── Процедурные фоны ──────────────────────────────────────
+// Рисуются кодом: вес файла не растёт (в отличие от base64-картинок), CORS не при чём, а контраст
+// под светлую/тёмную обложку можно держать самому. Нарочито спокойные — альфа 0.035-0.30: фон не
+// должен спорить с обложкой и текстом («не слишком кучерявый, не отвлекать внимание»).
+const _ST_PROC_KINDS=new Set(['night','rays','grid','blobs','radial']);
+function _stProcVignette(ctx,x,y,w,h,a){
+  const s=Math.min(w,h),v=ctx.createRadialGradient(x+w/2,y+h/2,s*0.14,x+w/2,y+h/2,Math.max(w,h)*0.72);
+  v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,'+a+')');ctx.fillStyle=v;ctx.fillRect(x,y,w,h);
+}
+// Акцент берётся с обложки (_stGameGlowColor), а он бывает почти чёрным — на тёмной основе такой
+// фон не читается вовсе. Поднимаем яркость до предсказуемой, сохраняя оттенок.
+function _stAccentBright(g){
+  const raw=_stGameGlowColor(g)||'rgba(60,40,120,';
+  const m=/rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(raw);
+  if(!m)return raw;
+  let r=+m[1],gg=+m[2],b=+m[3];
+  const mx=Math.max(r,gg,b,1),k=Math.min(3.2,190/mx);
+  if(k>1){r=Math.min(255,Math.round(r*k));gg=Math.min(255,Math.round(gg*k));b=Math.min(255,Math.round(b*k));}
+  return `rgba(${r},${gg},${b},`;
+}
+function _stProcBg(ctx,kind,x,y,w,h,g){
+  if(w<=0||h<=0)return;
+  const acc=_stAccentBright(g);
+  const s=Math.min(w,h);
+  ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+  // Общая тёмная основа у всех вариантов — текст всегда ложится на предсказуемый фон
+  const base=ctx.createLinearGradient(x,y,x,y+h);base.addColorStop(0,'#12122a');base.addColorStop(1,'#060614');
+  ctx.fillStyle=base;ctx.fillRect(x,y,w,h);
+  if(kind==='rays'){
+    ctx.save();ctx.translate(x+w/2,y+h/2);ctx.rotate(-20*Math.PI/180);
+    const band=Math.max(6,Math.round(s*0.15)),span=Math.max(w,h)*1.8;
+    for(let i=-3;i<=3;i++){ctx.fillStyle='rgba(255,255,255,'+(i%2?0.035:0.055)+')';ctx.fillRect(-span/2,i*band*1.95-band/2,span,band);}
+    ctx.restore();
+    _stProcVignette(ctx,x,y,w,h,0.5);
+  }else if(kind==='grid'){
+    const step=Math.max(18,Math.round(s*0.11)),lw=Math.max(1,Math.round(s*0.004));
+    ctx.fillStyle='rgba(255,255,255,0.05)';
+    for(let gx=x+step;gx<x+w;gx+=step)ctx.fillRect(Math.round(gx),y,lw,h);
+    for(let gy=y+step;gy<y+h;gy+=step)ctx.fillRect(x,Math.round(gy),w,lw);
+    _stProcVignette(ctx,x,y,w,h,0.55);
+  }else if(kind==='blobs'){
+    const b1=ctx.createRadialGradient(x+w*.24,y+h*.22,0,x+w*.24,y+h*.22,s*.95);
+    b1.addColorStop(0,acc+'0.46)');b1.addColorStop(.55,acc+'0.14)');b1.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=b1;ctx.fillRect(x,y,w,h);
+    const b2=ctx.createRadialGradient(x+w*.80,y+h*.78,0,x+w*.80,y+h*.78,s*.75);
+    b2.addColorStop(0,acc+'0.32)');b2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=b2;ctx.fillRect(x,y,w,h);
+    _stProcVignette(ctx,x,y,w,h,0.38);
+  }else if(kind==='radial'){
+    const r=ctx.createRadialGradient(x+w/2,y+h*.36,0,x+w/2,y+h*.36,s*1.15);
+    r.addColorStop(0,acc+'0.50)');r.addColorStop(.5,acc+'0.15)');r.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=r;ctx.fillRect(x,y,w,h);
+    _stProcVignette(ctx,x,y,w,h,0.58);
+  }
+  ctx.restore();
+}
+// Обложка — или процедурный фон вместо неё. Раньше «картинки нет» во всех шаблонах означало один и
+// тот же плоский тёмно-синий градиент, а выбор в строке игры шаблоны не читали вовсе.
+function _stCoverOrBg(ctx,x,y,w,h,g,useTransform){
+  const kind=(g&&g.bg)||'image';
+  if(kind==='image'){
+    if(g&&g.imgEl){_stImgRect(ctx,g.imgEl,x,y,w,h,useTransform?g.transform:null);return true;}
+    _stProcBg(ctx,_ST_PROC_KINDS.has(_stBgStyle)?_stBgStyle:'night',x,y,w,h,g);return false;
+  }
+  _stProcBg(ctx,kind,x,y,w,h,g);return false;
+}
+// ── Фильтр обложки ────────────────────────────────────────
+// Кнопки «Фон шаблона» меняли только фон, саму картинку тронуть было нечем. Тон/контраст —
+// через ctx.filter (он уходит и в экспорт), виньетка и затемнение — слоем поверх той же области.
+const _ST_IMG_FILTERS=[
+  {id:'none',    label:'Нет'},
+  {id:'bw',      label:'Ч-б',        css:a=>`grayscale(${a.toFixed(2)})`},
+  {id:'warm',    label:'Тёплый',     css:a=>`sepia(${(0.5*a).toFixed(2)}) saturate(${(1+0.3*a).toFixed(2)}) brightness(${(1+0.04*a).toFixed(2)})`},
+  {id:'cool',    label:'Холодный',   tint:a=>`rgba(40,120,255,${(0.28*a).toFixed(2)})`, css:a=>`saturate(${(1-0.2*a).toFixed(2)}) contrast(${(1+0.10*a).toFixed(2)})`},
+  {id:'contrast',label:'Контраст',   css:a=>`contrast(${(1+0.45*a).toFixed(2)}) saturate(${(1+0.25*a).toFixed(2)})`},
+  {id:'vignette',label:'Виньетка',   overlay:'vignette'},
+  {id:'dark',    label:'Затемнение', overlay:'dark'},
+];
+let _stImgFilter=localStorage.getItem('cc_img_filter')||'none';
+let _stImgFilterAmt=Math.min(1,Math.max(0,(+localStorage.getItem('cc_img_filter_amt')||70)/100));
+function _stImgFilterDef(){return _ST_IMG_FILTERS.find(f=>f.id===_stImgFilter)||_ST_IMG_FILTERS[0];}
+function _stImgFilterOverlay(ctx,x,y,w,h,f,a){
+  if(w<=0||h<=0)return;
+  ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+  if(f.overlay==='vignette'){
+    const s=Math.max(w,h),v=ctx.createRadialGradient(x+w/2,y+h/2,Math.min(w,h)*0.22,x+w/2,y+h/2,s*0.72);
+    v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,'+(0.85*a).toFixed(2)+')');ctx.fillStyle=v;ctx.fillRect(x,y,w,h);
+  }else if(f.overlay==='dark'){ctx.fillStyle='rgba(0,0,0,'+(0.55*a).toFixed(2)+')';ctx.fillRect(x,y,w,h);}
+  if(f.tint){ctx.globalCompositeOperation='soft-light';ctx.fillStyle=f.tint(a);ctx.fillRect(x,y,w,h);}
+  ctx.restore();
+}
+function _stSetImgFilter(id){
+  if(_stImgFilter!==id)jEvent('used',{feature:'imgFilter',from:_stImgFilter,to:id,tpl:_stTplId});
+  _stImgFilter=id;localStorage.setItem('cc_img_filter',id);
+  _stRenderImgFilterBtns();_stRedrawCurrent();
+}
+function _stSetImgFilterAmt(v){
+  _stImgFilterAmt=Math.min(1,Math.max(0,(+v||0)/100));
+  localStorage.setItem('cc_img_filter_amt',String(Math.round(_stImgFilterAmt*100)));
+  const lbl=document.getElementById('st-imgf-amt-val');if(lbl)lbl.textContent=Math.round(_stImgFilterAmt*100)+'%';
+  // Ползунок шлёт oninput на каждый шаг — в журнал кладём схлопнутым, как остальные микроправки
+  jAgg('imgfamt','prop_change',{key:'imgFilterAmt',elType:'cover',tpl:_stTplId},undefined,_stImgFilterAmt,900);
+  _stRedrawCurrent();
+}
+function _stRenderImgFilterBtns(){
+  const box=document.getElementById('st-imgf-btns');if(!box)return;
+  box.innerHTML=_ST_IMG_FILTERS.map(f=>{const on=f.id===_stImgFilter;
+    return `<button onclick="_stSetImgFilter('${f.id}')" style="padding:5px 9px;border-radius:5px;border:1px solid ${on?'var(--blue)':'var(--border)'};background:${on?'rgba(0,112,209,.2)':'var(--card)'};color:${on?'var(--blue)':'var(--muted)'};font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">${f.label}</button>`;}).join('');
+  const row=document.getElementById('st-imgf-amt-row');
+  if(row){row.style.display=_stImgFilter==='none'?'none':'flex';
+    const sl=document.getElementById('st-imgf-amt');if(sl)sl.value=String(Math.round(_stImgFilterAmt*100));
+    const lbl=document.getElementById('st-imgf-amt-val');if(lbl)lbl.textContent=Math.round(_stImgFilterAmt*100)+'%';}
 }
 function _getGrainCanvas(){
   if(_grainCanvas)return _grainCanvas;
@@ -2329,7 +2502,20 @@ function _stUpdateTplBtns(){
 }
 
 // ── Template Helpers ──────────────────────────────────────
+// Обёртка над отрисовкой обложки: здесь и только здесь применяется «Фильтр обложки».
+// Раз все шаблоны (и мини-обложки) рисуют картинку через неё, фильтр ложится единообразно
+// и одинаково уезжает в экспорт — ctx.filter работает и на offscreen-канвасе.
 function _stImgRect(ctx,img,x,y,w,h,t){
+  if(!img)return;
+  const f=_stImgFilterDef(),a=_stImgFilterAmt;
+  const useCss=!!(f.css&&a>0);
+  ctx.save();
+  if(useCss){try{ctx.filter=f.css(a);}catch(e){}}
+  _stImgRectRaw(ctx,img,x,y,w,h,t);
+  ctx.restore();
+  if(a>0&&(f.overlay||f.tint))_stImgFilterOverlay(ctx,x,y,w,h,f,a);
+}
+function _stImgRectRaw(ctx,img,x,y,w,h,t){
   if(!img)return;
   if(t&&(t.ox||t.oy||(t.scale&&t.scale!==1))){
     // CC-5: перекадровка обложки в шаблонах — ox/oy заданы в story-координатах (как в _stDrawBg/drag-хендлерах),
@@ -2348,8 +2534,7 @@ function _stImgRect(ctx,img,x,y,w,h,t){
 }
 function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   const sx=ctx.canvas.width/STORY_W;
-  if(g&&g.imgEl){_stImgRect(ctx,g.imgEl,x,y,w,h,g.transform);}
-  else{const grd=ctx.createLinearGradient(x,y,x,y+h);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(x,y,w,h);}
+  _stCoverOrBg(ctx,x,y,w,h,g,true);
   if(!g)return;
   const pad=Math.round(18*sx),tfs=Math.max(34*sx,14),pfs=Math.max(52*sx,18),tlh=tfs*1.15;
   // QR на карточку игры — у правого края плашки. Размер считаем от базовой высоты плашки (30% слота),
@@ -2364,8 +2549,19 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   const titleH=tlines.length*tlh;
   // CC-8: описание рисуем ВНУТРИ плашки под ценой; высота плашки растёт от контента (без описания — как раньше, 30%)
   const descStr=(showDesc&&_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
-  const dfs=Math.max(28*sx,11),dlh=dfs*1.32;let dlines=[];
-  if(descStr){ctx.save();ctx.font=`${dfs}px 'Noto Sans',sans-serif`;dlines=_wrapLines(ctx,descStr,textW,2);ctx.restore();}
+  // Описание внутри плашки — та же логика, что у зоны описания: строк до четырёх, кегль ужимается.
+  // Число строк дополнительно ограничено тем, что физически влезает в предельную высоту плашки (52%
+  // слота): иначе текст перехлестнул бы цену — плашке расти дальше некуда.
+  let dfs=Math.max(28*sx,11),dlh=dfs*1.32,dlines=[];
+  const _vpad0=Math.round(14*sx),_maxCardH=Math.round(h*0.52);
+  const _availDesc=Math.max(0,_maxCardH-_vpad0*2-titleH-pfs-Math.round(18*sx));
+  if(descStr&&_availDesc>=dlh){ctx.save();
+    // Внутри плашки места больше, чем в зоне описания под кадром, поэтому и потолок строк выше:
+    // с жёсткими четырьмя текст ужимался до 21px при наполовину пустой плашке.
+    const dfit=_fitLines(ctx,descStr,textW,{fs:dfs,minFs:Math.max(21*sx,9),lh:1.32,
+      maxLines:Math.max(1,Math.min(6,Math.floor(_availDesc/dlh))),
+      font:f=>`${f}px 'Noto Sans',sans-serif`});
+    dlines=dfit.lines;dfs=dfit.fs;dlh=dfit.lh;ctx.restore();}
   const descH=dlines.length?dlines.length*dlh:0;
   // Высота плашки — те же ~30% слота; растёт только если контент физически не влезает (мини-карточки).
   const baseH=Math.round(h*0.30),needH=Math.round(14*sx)*2+titleH+descH+pfs+Math.round(18*sx);
@@ -2390,21 +2586,31 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-pad-qrRes,by=Math.round(priceY+(pfs-bh)/2);ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(qrS)_stDrawQr(ctx,qrImg,x+w-pad-qrPadW-qrS,cardY+Math.round((cardH-qrS)/2),qrS);
 }
-function _stDrawDescZone(ctx,x,y,w,g,measureOnly){
+// Сколько строк максимум отдаём описанию. Четыре, а не «сколько угодно»: высота блока НЕ должна
+// зависеть от y, иначе замер (шаблоны меряют блок с y=0) разойдётся с отрисовкой и вёрстка поедет.
+// Четырёх строк с ужимающимся кеглем хватает примерно на 220 знаков против прежних ~95.
+const ST_DESC_MAX_LINES=4;
+// Сколько строк реально помещается ниже отметки y. Нужно там, где описание идёт последним блоком
+// на фиксированной высоте («Веер», «Каскад»): при трёх играх места внизу нет совсем, и выросший
+// блок подтягивался вверх, на плашку нижней карточки. Меньше двух строк не опускаемся — так было
+// и раньше, до роста блока.
+function _stDescLinesFor(ctx,y){
+  const sx=ctx.canvas.width/STORY_W,lh=Math.max(34*sx,12)*1.4;
+  return Math.max(2,Math.min(ST_DESC_MAX_LINES,Math.floor((ctx.canvas.height-y-Math.round(32*sx))/lh)));
+}
+function _stDrawDescZone(ctx,x,y,w,g,measureOnly,maxLines){
   if(!_stDescOn||!g||!_stShortDescs[g.title])return 0;
-  const sx=ctx.canvas.width/STORY_W,desc=_stShortDescs[g.title],fs=Math.max(34*sx,12),pad=Math.round(16*sx),lh=fs*1.4;
-  ctx.save();ctx.font=`${fs}px 'Noto Sans',sans-serif`;
-  const words=desc.split(' '),lines=[];let line='';
-  for(const word of words){const t=line?line+' '+word:word;if(ctx.measureText(t).width>w-pad*2&&line){lines.push(line);line=word;}else line=t;}
-  if(line)lines.push(line);
-  if(lines.length>2){lines.length=2;let last=lines[1];while(ctx.measureText(last+'…').width>w-pad*2&&last.length>1)last=last.slice(0,-1);lines[1]=last.replace(/\s+$/,'')+'…';}
-  const barH=lines.length*lh+pad*2;
+  const sx=ctx.canvas.width/STORY_W,desc=_stShortDescs[g.title],pad=Math.round(16*sx);
+  ctx.save();
+  const fit=_fitLines(ctx,desc,w-pad*2,{fs:Math.max(34*sx,12),minFs:Math.max(24*sx,10),lh:1.4,
+    maxLines:Math.max(1,Math.min(ST_DESC_MAX_LINES,maxLines||ST_DESC_MAX_LINES)),font:f=>`${f}px 'Noto Sans',sans-serif`});
+  const barH=fit.h+pad*2;
   if(measureOnly){ctx.restore();return barH;} // вызывающий шаблон сначала меряет блок, потом верстает от него
   y=Math.max(0,Math.min(y,ctx.canvas.height-barH)); // CC-6: не выпускать зону описания за нижний край холста (Каскад n=3)
   // Своей подложки у описания больше нет: во всех шаблонах оно ложится либо на тёмную карточку,
   // либо на затемнённый низ фона — вторая тёмная плашка поверх первой читалась как лишний прямоугольник.
   ctx.fillStyle='rgba(200,200,220,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
-  lines.forEach((l,i)=>ctx.fillText(l,x+pad,y+pad+i*lh));
+  fit.lines.forEach((l,i)=>ctx.fillText(l,x+pad,y+pad+i*fit.lh));
   ctx.restore();
   return barH;
 }
@@ -2456,6 +2662,7 @@ function _stRenderTemplate(){
   const dgs=document.getElementById('st-desc-game');if(dgs)dgs.style.display=n>1?'':'none';
   _stSyncDescEdit();
   _stSyncBgBtns();
+  _stRenderImgFilterBtns();
   ({poster:_stTplPoster,cards:_stTplCard1,hero:_stTplHero,fan:_stTplFan,diag:_stTplDiag,cascade:_stTplCascade,horizon:_stTplHorizon,neon:_stTplNeon}[_stTplId]||_stTplCard1)();
   if(_stLogoImg&&_stLogoPos!=='none')_stDrawTemplateLogo(_stCtx,_stCanvas.width,_stCanvas.height,_stCanvas.width/STORY_W);
   // Зерно — фильтр всего кадра поверх всего, включая обложку и логотип. Раньше оно жило внутри
@@ -2468,15 +2675,46 @@ function _stRenderTemplate(){
 // рабочими. «Тёмный» и «Зерно» доступны всегда: первый — это отсутствие эффекта, второй — фильтр кадра.
 const _ST_BG_TPLS=new Set(['fan','cascade']);
 const ST_GRAIN_ALPHA=0.5;
+const _ST_BG_STYLES=[
+  {id:'dark',  label:'Тёмный'},
+  {id:'rays',  label:'Лучи'},
+  {id:'grid',  label:'Сетка'},
+  {id:'blobs', label:'Пятна'},
+  {id:'radial',label:'Градиент'},
+  {id:'blur',  label:'Blur-цвет'},
+  {id:'glow',  label:'Glow'},
+  {id:'grain', label:'Зерно'},
+];
+// Какие шаблоны вообще рисуют карточку с плашкой. В остальных три кнопки «Стиль карточки» не меняли
+// НИ ОДНОГО пикселя (замер: Постер/Веер/Горизонт/Неон — ровно 0%), но выглядели рабочими.
+// «Герой» при одной игре рисует «Постер», «Диагональ» — только мини-обложки, поэтому зависит от числа игр.
+function _stCardStyleAvail(){
+  const n=Math.min(_stGameCount,_stG.length,3);
+  if(_stTplId==='cards'||_stTplId==='cascade')return true;
+  if(_stTplId==='hero'||_stTplId==='diag')return n>1;
+  return false;
+}
 function _stSyncBgBtns(){
   // «Горизонт» — случай на границе: он рисует фон только когда обложка не загрузилась (или её нет
   // у своего товара). Тогда кнопки настоящие и гасить их нельзя; как только обложка приехала —
   // фон снова перекрыт, и они возвращаются в погашенное состояние.
   const avail=_ST_BG_TPLS.has(_stTplId)||(_stTplId==='horizon'&&!(_stG[0]&&_stG[0].imgEl));
-  ['blur','glow'].forEach(k=>{
-    const b=document.getElementById('st-bg-'+k);if(!b)return;
-    b.disabled=!avail;b.style.opacity=avail?'1':'.4';b.style.cursor=avail?'pointer':'not-allowed';
-    b.title=avail?'':'В этом шаблоне обложка занимает весь кадр — фона под ней нет. Работает в «Веере» и «Каскаде».';
+  const box=document.getElementById('st-bg-btns');
+  if(box){
+    box.innerHTML=_ST_BG_STYLES.map(s=>{
+      // Тёмный и Зерно живут всегда (отсутствие эффекта и фильтр кадра), процедурные — там же,
+      // где Blur/Glow: под обложкой во весь кадр фона попросту не видно.
+      const on=s.id===_stBgStyle,always=(s.id==='dark'||s.id==='grain');
+      const ok=always||avail;
+      const t=ok?'':'В этом шаблоне обложка занимает весь кадр — фона под ней не видно. Работает в «Веере» и «Каскаде», а в остальных — если у игры выбран фон вместо обложки.';
+      return `<button id="st-bg-${s.id}" onclick="_stSetBgStyle('${s.id}')" ${ok?'':'disabled'} title="${esc(t)}" style="padding:5px 9px;border-radius:5px;border:1px solid ${on?'var(--blue)':'var(--border)'};background:${on?'rgba(0,112,209,.2)':'var(--card)'};color:${on?'var(--blue)':'var(--muted)'};font-size:11px;cursor:${ok?'pointer':'not-allowed'};opacity:${ok?'1':'.4'};font-family:'Oswald',sans-serif;transition:.2s">${s.label}</button>`;
+    }).join('');
+  }
+  const cardOk=_stCardStyleAvail();
+  ['dark','gradient','minimal'].forEach(k=>{
+    const b=document.getElementById('st-card-'+k);if(!b)return;
+    b.disabled=!cardOk;b.style.opacity=cardOk?'1':'.4';b.style.cursor=cardOk?'pointer':'not-allowed';
+    b.title=cardOk?'':'В этом шаблоне карточки с плашкой нет — стиль менять нечему. Работает в «Карточках» и «Каскаде», а в «Герое»/«Диагонали» — от 2 игр.';
   });
 }
 
@@ -2485,8 +2723,7 @@ function _stTplPoster(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height,sx=cw/STORY_W;
   ctx.clearRect(0,0,cw,ch);
   const g=_stG[0];
-  if(g&&g.imgEl)_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);
-  else{const grd=ctx.createLinearGradient(0,0,0,ch);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(0,0,cw,ch);}
+  _stCoverOrBg(ctx,0,0,cw,ch,g,true);
   const oh=Math.round(ch*.50),grd=ctx.createLinearGradient(0,ch-oh,0,ch);
   grd.addColorStop(0,'rgba(4,4,16,0)');grd.addColorStop(.4,'rgba(4,4,16,.7)');grd.addColorStop(1,'rgba(4,4,16,.97)');
   ctx.fillStyle=grd;ctx.fillRect(0,ch-oh,cw,oh);
@@ -2497,7 +2734,7 @@ function _stTplPoster(){
   // Название + цена + описание — один блок, прижатый к низу кадра: раньше блок стоял на фиксированной
   // высоте (72-78%), и под ним оставалась пустая тёмная полоса примерно в пятую часть сторис.
   const tlh=tfs*1.08;
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);ctx.restore();
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);ctx.restore();
   const descH=hasDesc?_stDrawDescZone(ctx,0,0,cw-qr.res,g,true):0;
   const blockH=tlines.length*tlh+Math.round(10*sx)+pfs+(descH?descH:0);
   const blockTop=Math.round(ch-Math.round(ch*.055)-blockH);
@@ -2553,8 +2790,7 @@ function _stTplFan(){
     ctx.fillStyle='rgba(255,255,255,0.10)';ctx.fillRect(-hw-3,-hh-3,cW+6,cH+6);
     ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
     ctx.save();ctx.beginPath();ctx.rect(-hw,-hh,cW,cH);ctx.clip();
-    if(g.imgEl){_stImgRect(ctx,g.imgEl,-hw,-hh,cW,cH);}
-    else{const grd=ctx.createLinearGradient(-hw,-hh,hw,hh);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(-hw,-hh,cW,cH);}
+    _stCoverOrBg(ctx,-hw,-hh,cW,cH,g,false);
     ctx.restore();
     ctx.fillStyle='rgba(0,112,209,0.85)';ctx.fillRect(-hw,hh-Math.round(4),cW,Math.round(4));
     ctx.restore();
@@ -2583,21 +2819,20 @@ function _stTplFan(){
     infoBottom=Math.max(infoBottom,colBottom);
   }
   // описание идёт сразу под инфоблоками, а не на фиксированных 80% — иначе между ними зияла дыра
-  if(_stDescOn){const dg=Math.min(_stDescGame,n-1);_stDrawDescZone(ctx,0,Math.round(infoBottom+14*sx),cw,_stG[dg]);}
+  if(_stDescOn){const dg=Math.min(_stDescGame,n-1),dY=Math.round(infoBottom+14*sx);_stDrawDescZone(ctx,0,dY,cw,_stG[dg],false,_stDescLinesFor(ctx,dY));}
 }
 function _stTplDiag(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height,sx=cw/STORY_W;
   const n=Math.min(_stGameCount,_stG.length,3);ctx.clearRect(0,0,cw,ch);
   const g=_stG[0];
-  if(g&&g.imgEl)_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);
-  else{const grd=ctx.createLinearGradient(0,0,0,ch);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(0,0,cw,ch);}
+  _stCoverOrBg(ctx,0,0,cw,ch,g,true);
   ctx.save();ctx.beginPath();ctx.moveTo(0,Math.round(ch*.42));ctx.lineTo(cw,Math.round(ch*.62));ctx.lineTo(cw,ch);ctx.lineTo(0,ch);ctx.closePath();
   ctx.fillStyle='rgba(4,4,16,0.93)';ctx.fill();ctx.restore();
   ctx.save();ctx.strokeStyle='rgba(0,112,209,0.9)';ctx.lineWidth=Math.round(4*sx);ctx.beginPath();ctx.moveTo(0,Math.round(ch*.42));ctx.lineTo(cw,Math.round(ch*.62));ctx.stroke();ctx.restore();
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(44*sx,14),pfs=Math.max(Math.round(66*sx),22);
   const tlh=tfs*1.1;
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);ctx.restore();
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);ctx.restore();
   const titleH=tlines.length*tlh;
   // Блок текста прижат к низу тёмного клина (над рядом мини-обложек, если он есть) — фиксированные 46%
   // оставляли под ценой пустую тёмную зону
@@ -2635,8 +2870,7 @@ function _stTplCascade(){
     ctx.fillStyle='rgba(20,20,40,0.85)';ctx.fillRect(x,cy,cardW,cardH);
     ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
     ctx.save();ctx.beginPath();ctx.rect(x,cy,cardW,cardH);ctx.clip();
-    if(g.imgEl)_stImgRect(ctx,g.imgEl,x,cy,cardW,cardH);
-    else{const grd=ctx.createLinearGradient(x,cy,x,cy+cardH);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(x,cy,cardW,cardH);}
+    _stCoverOrBg(ctx,x,cy,cardW,cardH,g,false);
     ctx.restore();
     const plH=Math.round(cardH*.28),plY=cy+cardH-plH,pad=Math.round(14*sx);
     if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.90)';ctx.fillRect(x,plY,cardW,plH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,plY,cardW,Math.max(3,Math.round(3*sx)));}
@@ -2665,7 +2899,7 @@ function _stTplCascade(){
     const dg=Math.min(_stDescGame,n-1),descY=startY+(n-1)*step+cardH+Math.round(ch*.015);
     // При n=1 описание ложится ПОД карточкой и кода не касается — сужать его там нечего.
     const descW=_stDescHitsQr(ctx,_stG[dg],descY,lastQrTop,lastQrBot,cw)?Math.max(Math.round(cw*0.5),lastQrLeft-Math.round(12*sx)):cw;
-    _stDrawDescZone(ctx,0,descY,descW,_stG[dg]);
+    _stDrawDescZone(ctx,0,descY,descW,_stG[dg],false,_stDescLinesFor(ctx,descY));
   }
 }
 // Размер и отступ логотипа — те же правила, что у водяного знака коллажа (13% меньшей стороны),
@@ -2699,32 +2933,42 @@ function _stTemplateToEditor(){
   const slotH=STORY_H/n;
   for(let i=0;i<n;i++){
     const g=_stG[i];if(!g) continue;
-    const cardH=Math.round(slotH*0.30);const cardY=i*slotH+slotH-cardH;
     const pad=18;
-    // CC-10: тёмная плашка-подложка на нижние 30% слота (как в шаблоне) — иначе тексты висят прямо на картинке
+    // Описание раньше не переносилось вовсе: уходишь в редактор — текст с картинки пропадал
+    // (в элементах были только название, цена, скидка, QR и лого). Под него плашка становится выше,
+    // а содержимое распределяется как в шаблоне: название сверху, описание в середине, цена внизу.
+    const dtxt=(_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
+    const cardH=Math.round(slotH*(dtxt?0.42:0.30));const cardY=i*slotH+slotH-cardH;
+    // QR из шаблона переносим отдельным элементом — иначе доработка в редакторе молча теряет ссылку.
+    // Размер — те же правила, что в шаблоне: от базовой (не выросшей) высоты плашки, но не шире 20%
+    // кадра. Без верхнего предела при одной игре получался код на пол-сторис поверх названия.
+    const qUrl=_stQrOn?_stGameUrl(g):'';
+    const qs=Math.min(Math.round(slotH*0.30*0.78),Math.round(STORY_W*0.20));
+    const qrOn=!!(qUrl&&qs>=ST_QR_MIN),qrRes=qrOn?qs+pad:0;
+    const textW=STORY_W-pad*2-qrRes;
+    const titleH=Math.round(cardH*0.30);
+    // CC-10: тёмная плашка-подложка (как в шаблоне) — иначе тексты висят прямо на картинке
     _stEls.push({type:'overlay',x:0,y:cardY,w:STORY_W,h:cardH,text:'',fontSize:10,fontFamily:'Noto Sans',color:'rgba(0,0,0,0)',bgColor:'rgba(8,8,20,0.92)',opacity:1});
+    // title overlay
+    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:textW,h:titleH,text:g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
+    // description overlay
+    if(dtxt){
+      const dH=Math.max(40,cardH-(titleH+14)-118); // 118 — место под плашку цены у нижней кромки
+      _stEls.push({type:'overlay',x:pad,y:cardY+14+titleH,w:textW,h:dH,text:dtxt,fontSize:30,fontFamily:'Noto Sans',color:'rgba(210,210,228,0.92)',bgColor:'transparent',opacity:1});
+    }
     // price overlay
-    _stEls.push({type:'price',x:pad,y:cardY+Math.round(slotH*0.14),w:400,h:100,text:g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'',fontSize:68,color:'#f0c040',bgColor:'transparent',opacity:1});
+    _stEls.push({type:'price',x:pad,y:cardY+cardH-110,w:400,h:100,text:g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'',fontSize:68,color:'#f0c040',bgColor:'transparent',opacity:1});
     // sticker for discount
     if(g.discount)_stEls.push({type:'sticker',x:STORY_W-260,y:i*slotH+20,w:220,h:80,text:'-'+g.discount+'%',fontSize:52,shape:'pill',color:'#fff',bgColor:'#e04020',opacity:1});
-    // title overlay
-    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:STORY_W-pad*2,h:Math.round(slotH*0.12),text:g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
-    // QR из шаблона переносим отдельным элементом — иначе доработка в редакторе молча теряет ссылку
-    const qUrl=_stQrOn?_stGameUrl(g):'';
-    // Размер — те же правила, что в шаблоне: от высоты плашки, но не шире 20% кадра.
-    // Без верхнего предела при одной игре получался код на пол-сторис поверх названия.
-    const qs=Math.min(Math.round(slotH*0.30*0.78),Math.round(STORY_W*0.20));
-    if(qUrl&&qs>=ST_QR_MIN){
+    if(qrOn){
       const qEl={type:'qr',x:STORY_W-qs-pad-6,y:cardY+cardH-qs-16,w:qs,h:qs,logoUrl:_stQrSrc(qUrl),imgEl:null,opacity:1,gameUrl:qUrl};
-      _stEls.push(qEl);
-      const qImg=new Image();qImg.crossOrigin='anonymous';
-      qImg.onload=()=>{qEl.imgEl=qImg;_stRender();};
-      qImg.onerror=()=>{jError('story_qr','editor_load_failed',{src:qEl.logoUrl});showToast('Не удалось загрузить QR');};
-      qImg.src=qEl.logoUrl;
+      _stEls.push(qEl);_stLoadElImg(qEl,qEl.logoUrl);
     }
   }
   if(_stLogoImg&&_stLogoPos!=='none'){
-    const lSize=80;const p=16;
+    // Размер как в шаблоне (13% меньшей стороны), а не жёсткие 80px: иначе после переноса
+    // логотип внезапно ужимался почти вдвое против того, что человек видел в превью.
+    const lSize=_stLogoSize(STORY_W,STORY_H),p=_stLogoPad(STORY_W,STORY_H);
     const lx=_stLogoPos==='tr'?STORY_W-lSize-p:p;
     _stEls.push({type:'logo',x:lx,y:p,w:lSize,h:lSize,logoUrl:_stLogoUrl,imgEl:_stLogoImg,opacity:1});
   }
@@ -2824,7 +3068,7 @@ function openStory(){
   if(all.length>5)showToast('Для сторис доступны первые 5 игр (в кадре одновременно до 3)');
   const sel=all.slice(0,5);
   _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
-  _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
+  _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stRedoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
   _stShortDescsAI={};_stCapBot='';_jTplSwitches=0;
   jChainNew('story');
   jEvent('used',Object.assign({feature:'openStory',tpl:_stTplId,mode:_stMode,platform:_stPlatform,
@@ -2984,16 +3228,17 @@ function _stRender(){
   _stEls.forEach((el,idx)=>_stDrawEl(ctx,el,idx===_stSel,sx,sy));
 }
 function _stDrawBg(ctx,g,top,cw,slotH,sx,sy){
-  if(!g){_stFillGrad(ctx,0,top,cw,slotH,'#1a1a2e','#0e0e1c');return;}
+  if(!g){_stProcBg(ctx,'night',0,top,cw,slotH,null);return;}
   const bg=g.bg||'image';
-  if(bg==='image'){if(g.imgEl){const img=g.imgEl;const iw=img.naturalWidth||img.width||1;const ih=img.naturalHeight||img.height||1;const t=g.transform;const baseS=Math.max(cw/iw,slotH/ih);const s=baseS*t.scale;const dw=iw*s,dh=ih*s;const dx=(cw-dw)/2+t.ox*sx;const dy=top+(slotH-dh)/2+t.oy*sy;ctx.save();ctx.beginPath();ctx.rect(0,top,cw,slotH);ctx.clip();ctx.drawImage(img,dx,dy,dw,dh);ctx.restore();ctx.fillStyle='rgba(0,0,0,0.38)';ctx.fillRect(0,top,cw,slotH);}else{_stFillGrad(ctx,0,top,cw,slotH,'#1a1a2e','#0e0e1c');}}
+  // Обложку и фон рисуем тем же кодом, что и шаблоны — иначе редактор и шаблон расходятся
+  // (так и было: квадратики читал только он, а «Фильтр обложки» не знал бы про редактор вовсе).
+  if(bg==='image'){if(g.imgEl){_stImgRect(ctx,g.imgEl,0,top,cw,slotH,g.transform);ctx.fillStyle='rgba(0,0,0,0.38)';ctx.fillRect(0,top,cw,slotH);}else{_stProcBg(ctx,_ST_PROC_KINDS.has(_stBgStyle)?_stBgStyle:'night',0,top,cw,slotH,g);}}
   else if(bg==='custom'){ctx.fillStyle=g.bgColor||'#1a1a2e';ctx.fillRect(0,top,cw,slotH);}
-  else{const p=_ST_BG[bg];if(p&&p.colors)_stFillGrad(ctx,0,top,cw,slotH,p.colors[0],p.colors[1]);else _stFillGrad(ctx,0,top,cw,slotH,'#1a1a2e','#0e0e1c');}
+  else _stProcBg(ctx,_ST_PROC_KINDS.has(bg)?bg:'night',0,top,cw,slotH,g);
 }
-function _stFillGrad(ctx,x,y,w,h,c1,c2){const grad=ctx.createLinearGradient(x,y,x,y+h);grad.addColorStop(0,c1);grad.addColorStop(1,c2);ctx.fillStyle=grad;ctx.fillRect(x,y,w,h);}
 function _stDrawEl(ctx,el,sel,sx,sy){
   const x=el.x*sx,y=el.y*sy,w=el.w*sx,h=el.h*sy;ctx.save();ctx.globalAlpha=el.opacity!==undefined?el.opacity:1;
-  if(el.type==='overlay'){ctx.fillStyle=el.bgColor||'rgba(0,0,0,0.6)';_stRRect(ctx,x,y,w,h,8*sx);ctx.fill();if(el.text){ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`${Math.round(el.fontSize*sx)}px '${el.fontFamily||'Noto Sans'}'`;ctx.textAlign='center';_stWrapText(ctx,el.text,x+w/2,y+h/2,w-16*sx,el.fontSize*sx*1.35);}}
+  if(el.type==='overlay'){ctx.fillStyle=el.bgColor||'rgba(0,0,0,0.6)';_stRRect(ctx,x,y,w,h,8*sx);ctx.fill();if(el.text){ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';const _ofs=el.fontSize*sx,_off=f=>`${Math.round(f)}px '${el.fontFamily||'Noto Sans'}'`;ctx.font=_off(_ofs);ctx.textAlign='center';_stWrapText(ctx,el.text,x+w/2,y+h/2,w-16*sx,_ofs*1.35,h-10*sx,_off,_ofs);}}
   else if(el.type==='price'){ctx.fillStyle=el.bgColor||'rgba(0,112,209,0.92)';_stRRect(ctx,x,y,w,h,6*sx);ctx.fill();ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`bold ${Math.round(el.fontSize*sx)}px 'Oswald'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(el.text||'990 ₽',x+w/2,y+h/2);}
   else if(el.type==='sticker'){const r=el.shape==='pill'?h/2:el.shape==='rounded'?10*sx:3*sx;ctx.fillStyle=el.bgColor||'#e63946';_stRRect(ctx,x,y,w,h,r);ctx.fill();ctx.globalAlpha=1;ctx.fillStyle=el.color||'#ffffff';ctx.font=`bold ${Math.round(el.fontSize*sx)}px 'Oswald'`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(el.text||'СКИДКА',x+w/2,y+h/2);}
   // Заглушка «LOGO» (пока URL не вставлен) раньше сбрасывала альфу в жёсткие 0.4/0.5 — из-за этого
@@ -3004,10 +3249,37 @@ function _stDrawEl(ctx,el,sel,sx,sy){
   if(sel){ctx.save();ctx.strokeStyle='#4fc3f7';ctx.lineWidth=2;ctx.setLineDash([5,3]);ctx.strokeRect(x-2,y-2,w+4,h+4);ctx.setLineDash([]);ctx.fillStyle='#4fc3f7';[[x-4,y-4],[x+w,y-4],[x-4,y+h],[x+w,y+h]].forEach(([hx,hy])=>ctx.fillRect(hx,hy,8,8));ctx.restore();}
 }
 function _stRRect(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();}
-function _stWrapText(ctx,text,cx,cy,maxW,lineH){ctx.textBaseline='middle';const words=text.split(' '),lines=[];let line='';for(const w of words){const t=line?line+' '+w:w;if(ctx.measureText(t).width>maxW&&line){lines.push(line);line=w;}else line=t;}if(line)lines.push(line);const startY=cy-((lines.length-1)*lineH)/2;lines.forEach((l,i)=>ctx.fillText(l,cx,startY+i*lineH));}
+// Текст в оверлее не обрезался вовсе — просто вылезал за рамку элемента. Теперь, если задана
+// высота коробки, кегль ужимается до половины заданного, как и в шаблонах.
+function _stWrapText(ctx,text,cx,cy,maxW,lineH,maxH,fontOf,baseFs){
+  ctx.textBaseline='middle';
+  let fs=baseFs||0,lh=lineH,lines=_splitLines(ctx,text,maxW);
+  if(maxH&&fontOf&&baseFs){
+    for(let guard=0;guard<24&&lines.length*lh>maxH&&fs>baseFs*0.5+0.01;guard++){
+      fs=Math.max(baseFs*0.5,fs*0.93);lh=lineH*(fs/baseFs);
+      ctx.font=fontOf(fs);lines=_splitLines(ctx,text,maxW);
+    }
+  }
+  const startY=cy-((lines.length-1)*lh)/2;
+  lines.forEach((l,i)=>ctx.fillText(l,cx,startY+i*lh));
+}
 function _stCanvasXY(e){const r=_stCanvas.getBoundingClientRect();return{cx:((e.clientX-r.left)/r.width)*STORY_W,cy:((e.clientY-r.top)/r.height)*STORY_H};}
+// Ручка ресайза раньше была квадратом ±36 единиц вокруг каждого угла — то есть заезжала внутрь
+// элемента на 36 при его высоте 110 (плашка цены). На перетаскивание оставалась полоска
+// 328×38 единиц = 97×11 экранных пикселей превью, у стикера 85×8, у логотипа 62×8: мимо неё
+// попасть было почти невозможно, и вместо перемещения выходил ресайз. Теперь ручка живёт в
+// основном СНАРУЖИ (28 единиц наружу, 10 внутрь) — внутренность элемента целиком под драг.
+function _stCornerHit(el,cx,cy){
+  const OUT=28,IN=Math.min(10,Math.min(el.w,el.h)/4);
+  const corners=[['nw',el.x,el.y,-1,-1],['ne',el.x+el.w,el.y,1,-1],['sw',el.x,el.y+el.h,-1,1],['se',el.x+el.w,el.y+el.h,1,1]];
+  for(const [name,hx,hy,dirX,dirY] of corners){
+    const dx=(cx-hx)*dirX,dy=(cy-hy)*dirY; // >0 = наружу от элемента, <0 = внутрь
+    if(dx<=OUT&&dx>=-IN&&dy<=OUT&&dy>=-IN)return name;
+  }
+  return null;
+}
 function _stOnMouseDown(e){const{cx,cy}=_stCanvasXY(e);_stActiveSlot=Math.max(0,Math.min(Math.floor(cy/(STORY_H/_stGameCount)),_stGameCount-1));
-  if(_stSel>=0&&_stEls[_stSel]){const el=_stEls[_stSel];const TH=36;const corners=[['nw',el.x,el.y],['ne',el.x+el.w,el.y],['sw',el.x,el.y+el.h],['se',el.x+el.w,el.y+el.h]];for(const c of corners){if(Math.abs(cx-c[1])<=TH&&Math.abs(cy-c[2])<=TH){_stDrag={on:true,type:'resize',idx:_stSel,corner:c[0],ox:0,oy:0,t0ox:0,t0oy:0};return;}}}
+  if(_stSel>=0&&_stEls[_stSel]){const corner=_stCornerHit(_stEls[_stSel],cx,cy);if(corner){_stDrag={on:true,type:'resize',idx:_stSel,corner,ox:0,oy:0,t0ox:0,t0oy:0};return;}}
   let hit=-1;for(let i=_stEls.length-1;i>=0;i--){const el=_stEls[i];if(cx>=el.x&&cx<=el.x+el.w&&cy>=el.y&&cy<=el.y+el.h){hit=i;break;}}_stSel=hit;_stRender();_stRenderSidebar();if(hit>=0){const el=_stEls[hit];_stDrag={on:true,type:'el',idx:hit,ox:cx-el.x,oy:cy-el.y,t0ox:0,t0oy:0};}else{const slotH=STORY_H/_stGameCount;const slotIdx=Math.min(Math.floor(cy/slotH),_stGameCount-1);const g=_stG[slotIdx];if(g&&g.imgEl&&(!g.bg||g.bg==='image')){_stDrag={on:true,type:'bg',idx:slotIdx,ox:cx,oy:cy,t0ox:g.transform.ox,t0oy:g.transform.oy};}else{_stDrag={on:false,type:'',idx:-1,ox:0,oy:0,t0ox:0,t0oy:0};}}}
 function _stOnMouseMove(e){if(!_stDrag.on) return;const{cx,cy}=_stCanvasXY(e);if(_stDrag.type==='el'){const el=_stEls[_stDrag.idx];if(!el) return;el.x=Math.max(0,Math.min(STORY_W-el.w,cx-_stDrag.ox));el.y=Math.max(0,Math.min(STORY_H-el.h,cy-_stDrag.oy));}else if(_stDrag.type==='resize'){const el=_stEls[_stDrag.idx];if(!el) return;const MIN=40,c=_stDrag.corner;if(c.includes('e'))el.w=Math.max(MIN,Math.min(STORY_W-el.x,cx-el.x));if(c.includes('s'))el.h=Math.max(MIN,Math.min(STORY_H-el.y,cy-el.y));if(c.includes('w')){const r=el.x+el.w;el.x=Math.max(0,Math.min(cx,r-MIN));el.w=r-el.x;}if(c.includes('n')){const b=el.y+el.h;el.y=Math.max(0,Math.min(cy,b-MIN));el.h=b-el.y;}}else if(_stDrag.type==='bg'){const g=_stG[_stDrag.idx];if(!g) return;g.transform.ox=_stDrag.t0ox+(cx-_stDrag.ox);g.transform.oy=_stDrag.t0oy+(cy-_stDrag.oy);}_stRedrawCurrent();}
 function _stOnMouseUp(){if(_stDrag.type==='resize')_stRenderSidebar();_stDrag.on=false;}
@@ -3017,14 +3289,69 @@ function _stPinchSlot(cx,cy){const r=_stCanvas.getBoundingClientRect();const can
 function _stOnTouchStart(e){e.preventDefault();if(e.touches.length===1){_stPinch.active=false;_stOnMouseDown(e.touches[0]);}else if(e.touches.length===2){_stDrag.on=false;const cx=(e.touches[0].clientX+e.touches[1].clientX)/2;const cy=(e.touches[0].clientY+e.touches[1].clientY)/2;_stPinch={active:true,dist:Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY),slotIdx:_stPinchSlot(cx,cy)};}}
 function _stOnTouchMove(e){e.preventDefault();if(e.touches.length===2&&_stPinch.active){const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);const g=_stG[_stPinch.slotIdx];if(g&&g.imgEl){g.transform.scale=Math.max(0.3,Math.min(4,g.transform.scale+(dist-_stPinch.dist)/200));_stRedrawCurrent();}_stPinch.dist=dist;}else if(e.touches.length===1){_stOnMouseMove(e.touches[0]);}}
 function _stOnTouchEnd(){_stPinch.active=false;_stOnMouseUp();}
-function _stSnapshot(){_stUndoStack.push({els:_stEls.map(el=>({...el})),sel:_stSel});if(_stUndoStack.length>30)_stUndoStack.shift();}
+function _stSnapState(){return {els:_stEls.map(el=>({...el})),sel:_stSel};}
+function _stSnapshot(){_stUndoStack.push(_stSnapState());if(_stUndoStack.length>30)_stUndoStack.shift();_stRedoStack=[];_stSyncHistBtns();}
 // Ctrl+Z — сильнейший сигнал «сделал не то»: по паре (что добавили → сразу undo)
 // видно, какие элементы и дефолты промахиваются.
-function stUndo(){if(!_stUndoStack.length){showToast('Нечего отменять');return;}const snap=_stUndoStack.pop();jEvent('undo',{els:_stEls.length,selType:_stSel>=0&&_stEls[_stSel]?_stEls[_stSel].type:null,depth:_stUndoStack.length});_stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();}
-function stAddOverlay(){jEvent('el_add',{type:'overlay',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'overlay',x:80,y:1400,w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddPrice(){jEvent('el_add',{type:'price',tpl:_stTplId,els:_stEls.length});_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stEls.push({type:'price',x:340,y:Math.round(si*slotH+slotH*0.7),w:400,h:110,text:g&&g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddSticker(){jEvent('el_add',{type:'sticker',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'sticker',x:60,y:60,w:360,h:100,text:'СКИДКА',fontSize:58,shape:'pill',color:'#ffffff',bgColor:'#e63946',opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
-function stAddLogo(){jEvent('el_add',{type:'logo',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stEls.push({type:'logo',x:40,y:40,w:280,h:100,logoUrl:'',imgEl:null,opacity:1});_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+function stUndo(){
+  if(!_stUndoStack.length){showToast('Нечего отменять');return;}
+  const snap=_stUndoStack.pop();
+  jEvent('undo',{els:_stEls.length,selType:_stSel>=0&&_stEls[_stSel]?_stEls[_stSel].type:null,depth:_stUndoStack.length});
+  _stRedoStack.push(_stSnapState());if(_stRedoStack.length>30)_stRedoStack.shift();
+  _stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();
+}
+// Откатить откат раньше было нечем: стек был односторонний, и промах по Ctrl+Z стоил работы.
+// Своё имя события не заводим (таксономия журнала закрытая) — идёт как used{feature:'redo'}.
+function stRedo(){
+  if(!_stRedoStack.length){showToast('Нечего вернуть');return;}
+  const snap=_stRedoStack.pop();
+  jEvent('used',{feature:'redo',els:_stEls.length,depth:_stRedoStack.length});
+  _stUndoStack.push(_stSnapState());if(_stUndoStack.length>30)_stUndoStack.shift();
+  _stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();
+}
+function _stSyncHistBtns(){
+  [['st-undo-btn',_stUndoStack.length,'↶ Отменить'],['st-redo-btn',_stRedoStack.length,'↷ Вернуть']].forEach(([id,n,lbl])=>{
+    const b=document.getElementById(id);if(!b)return;
+    b.disabled=!n;b.style.opacity=n?'1':'.4';b.style.cursor=n?'pointer':'not-allowed';
+    b.textContent=n?`${lbl} (${n})`:lbl;
+  });
+}
+// Все кнопки «Добавить» клали элемент в одну и ту же фиксированную точку: второе нажатие давало
+// невидимый дубль ровно поверх первого. Отсюда и «нажал, пытался перетащить — вместо этого
+// клонировал», и «QR в редакторе аж 4 штуки» (на канвасе один код, в списке четыре строки).
+// Каждый следующий элемент сдвигаем лесенкой и держим в пределах кадра.
+function _stElSpawn(el,x,y){
+  const STEP=56;let k=0;
+  while(k<14&&_stEls.some(e=>Math.abs(e.x-(x+k*STEP))<10&&Math.abs(e.y-(y+k*STEP))<10))k++;
+  el.x=Math.max(0,Math.min(STORY_W-el.w,x+k*STEP));
+  el.y=Math.max(0,Math.min(STORY_H-el.h,y+k*STEP));
+  return el;
+}
+function _stPushEl(el){_stEls.push(el);_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
+// Картинка элемента (логотип/QR): crossOrigin обязателен — без него канвас тейнтится, а экспорт
+// перезагружает картинку уже с ним, и логотип молча пропадает из PNG при живом превью.
+function _stLoadElImg(el,url){
+  if(!url)return;
+  const img=new Image();
+  if(!url.startsWith('data:'))img.crossOrigin='anonymous';
+  img.onload=()=>{el.imgEl=img;_stRender();};
+  img.onerror=()=>{el.imgEl=null;_imgFail('story_el_img',url,{elType:el.type});if(el.type==='qr')showToast('Не удалось загрузить QR');_stRender();};
+  img.src=url;
+}
+function stAddOverlay(){jEvent('el_add',{type:'overlay',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stPushEl(_stElSpawn({type:'overlay',w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1},80,1400));}
+function stAddPrice(){jEvent('el_add',{type:'price',tpl:_stTplId,els:_stEls.length});_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stPushEl(_stElSpawn({type:'price',w:400,h:110,text:g&&g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1},340,Math.round(si*slotH+slotH*0.7)));}
+function stAddSticker(){jEvent('el_add',{type:'sticker',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stPushEl(_stElSpawn({type:'sticker',w:360,h:100,text:'СКИДКА',fontSize:58,shape:'pill',color:'#ffffff',bgColor:'#e63946',opacity:1},60,60));}
+// Логотип рождался пустым (logoUrl:'') — пунктирная рамка с надписью LOGO, и без ручного URL от
+// элемента не было никакого толку: «ну добавляю я логотип, и что?». Кладём логотип магазина,
+// который и так уже загружен, квадратом — прежние 280×100 растягивали круглый значок.
+function stAddLogo(){
+  jEvent('el_add',{type:'logo',tpl:_stTplId,els:_stEls.length});_stSnapshot();
+  const url=_stLogoUrl||DEFAULT_LOGO_URL;
+  const ready=(_stLogoImg&&_stLogoUrl===url)?_stLogoImg:null;
+  const el=_stElSpawn({type:'logo',w:200,h:200,logoUrl:url,imgEl:ready,opacity:1},40,40);
+  _stPushEl(el);
+  if(!ready)_stLoadElImg(el,url);
+}
 // QR-код на ?game=<id> активного слота — ведёт на карточку игры на сайте. api.qrserver.com не отдаёт
 // CORS-заголовки для <img>, поэтому URL заворачиваем через тот же VPS-прокси /igdb/img, что и обложки.
 function stAddQR(){
@@ -3034,13 +3361,9 @@ function stAddQR(){
   _stSnapshot();
   const gameUrl=_stGameUrl(g);
   const qrSrc=_stQrSrc(gameUrl);
-  const el={type:'qr',x:STORY_W-260,y:STORY_H-460,w:200,h:200,logoUrl:qrSrc,imgEl:null,opacity:1,gameUrl};
-  _stEls.push(el);_stSel=_stEls.length-1;
-  const img=new Image();img.crossOrigin='anonymous';
-  img.onload=()=>{el.imgEl=img;_stRender();};
-  img.onerror=()=>{showToast('Не удалось загрузить QR');};
-  img.src=qrSrc;
-  _stRender();_stRenderSidebar();
+  const el=_stElSpawn({type:'qr',w:200,h:200,logoUrl:qrSrc,imgEl:null,opacity:1,gameUrl},STORY_W-260,STORY_H-460);
+  _stPushEl(el);
+  _stLoadElImg(el,qrSrc);
 }
 function stDeleteSel(){if(_stSel<0) return;jEvent('el_delete',{type:_stEls[_stSel]?_stEls[_stSel].type:null,els:_stEls.length});_stSnapshot();_stEls.splice(_stSel,1);_stSel=-1;_stRender();_stRenderSidebar();}
 function stDuplicateSel(){if(_stSel<0) return;jEvent('el_dup',{type:_stEls[_stSel]?_stEls[_stSel].type:null,els:_stEls.length});_stSnapshot();_stEls.push(Object.assign({},_stEls[_stSel],{x:_stEls[_stSel].x+30,y:_stEls[_stSel].y+30}));_stSel=_stEls.length-1;_stRender();_stRenderSidebar();}
@@ -3048,11 +3371,14 @@ function stMoveUp(){if(_stSel<0||_stSel>=_stEls.length-1) return;jEvent('el_laye
 function stMoveDown(){if(_stSel<=0) return;jEvent('el_layer',{type:_stEls[_stSel]?.type,dir:'down'});_stSnapshot();[_stEls[_stSel],_stEls[_stSel-1]]=[_stEls[_stSel-1],_stEls[_stSel]];_stSel--;_stRender();_stRenderSidebar();}
 function stSetGameCount(n){jEvent('used',{feature:'storyGameCount',from:_stGameCount,to:Math.min(n,_stG.length),tpl:_stTplId});_stGameCount=Math.min(n,_stG.length);_stBuildGameList();_stRedrawCurrent();}
 function stReorderGame(i,dir){const j=i+dir;if(j<0||j>=_stG.length) return;jEvent('used',{feature:'storyReorder',i,dir,title:_stG[i]?.title});[_stG[i],_stG[j]]=[_stG[j],_stG[i]];for(let k=0;k<Math.min(_stG.length,3);k++)_stUpgradeSlotHD(k);_stBuildGameList();_stRedrawCurrent();}
-function stSetSlotBg(i,bg){if(!_stG[i]) return;jEvent('used',{feature:'slotBg',slot:i,from:_stG[i].bg||'image',to:bg,title:_stG[i].title});_stG[i].bg=bg;_stBuildGameList();_stRender();}
+// _stRender() — рендерер РЕДАКТОРА. Вызов его отсюда в режиме шаблонов подменял весь кадр плоской
+// раскладкой редактора (замер: 100% пикселей), а следующая перерисовка шаблона всё возвращала —
+// отсюда и жалоба «вместо картинки сплошной цвет». Перерисовываем то, что сейчас на экране.
+function stSetSlotBg(i,bg){if(!_stG[i]||!_ST_SLOT_BG_IDS.has(bg)) return;jEvent('used',{feature:'slotBg',slot:i,from:_stG[i].bg||'image',to:bg,title:_stG[i].title});_stG[i].bg=bg;_stBuildGameList();_stRedrawCurrent();}
 function _stBuildGameList(){
   const el=document.getElementById('st-game-list');if(!el) return;
   document.querySelectorAll('.st-gc-btn').forEach((b,i)=>{const active=(i+1)===_stGameCount;const avail=(i+1)<=_stG.length;b.style.background=active?'var(--blue)':'transparent';b.style.color=active?'#fff':avail?'var(--muted)':'var(--border)';b.disabled=!avail;});
-  el.innerHTML=_stG.map((g,i)=>{const isActive=i<_stGameCount;const bgBtns=Object.entries(_ST_BG).map(([key,p])=>{const bgStyle=key==='image'?'background:linear-gradient(135deg,#555,#999)':p.colors?`background:linear-gradient(to bottom,${p.colors[0]},${p.colors[1]})`:'background:#555';const sel=(g.bg||'image')===key;return `<div onclick="stSetSlotBg(${i},'${key}')" style="${bgStyle};width:13px;height:13px;border-radius:2px;cursor:pointer;flex-shrink:0;${sel?'outline:2px solid #4fc3f7;outline-offset:1px':''}" title="${key}"></div>`;}).join('');return `<div style="display:flex;align-items:center;gap:5px;padding:5px 7px;border-radius:6px;background:var(--card);border:1px solid ${isActive?'rgba(0,112,209,0.5)':'var(--border)'}"><div style="width:15px;height:15px;border-radius:50%;background:${isActive?'var(--blue)':'var(--border)'};color:${isActive?'#fff':'var(--muted)'};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>${g.imgUrl?`<img src="${esc(g.imgUrl)}" style="width:22px;height:29px;object-fit:cover;border-radius:2px;flex-shrink:0" onerror="this.style.opacity='0.2'">` : '<div style="width:22px;height:29px;background:var(--border);border-radius:2px;flex-shrink:0"></div>'}<div style="flex:1;min-width:0;font-size:10px;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(g.title.length>16?g.title.slice(0,14)+'…':g.title)}</div><div style="display:flex;gap:2px;align-items:center">${bgBtns}</div><button onclick="event.stopPropagation();_stPickImg(${i})" title="Сменить обложку" style="width:22px;height:29px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--muted);font-size:11px;cursor:pointer;padding:0;flex-shrink:0">🖼</button><div style="display:flex;flex-direction:column;gap:1px;flex-shrink:0"><button onclick="stReorderGame(${i},-1)" ${i===0?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▲</button><button onclick="stReorderGame(${i},1)" ${i===_stG.length-1?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▼</button></div></div>`;}).join('');
+  el.innerHTML=_stG.map((g,i)=>{const isActive=i<_stGameCount;const bgBtns=_ST_SLOT_BG.map(b=>{const sel=(g.bg||'image')===b.id;return `<div onclick="stSetSlotBg(${i},'${b.id}')" style="background:${b.css};width:14px;height:14px;border-radius:3px;cursor:pointer;flex-shrink:0;${sel?'outline:2px solid #4fc3f7;outline-offset:1px':'opacity:.75'}" title="${esc(b.id==='image'?'Обложка игры':'Фон вместо обложки: '+b.label)}"></div>`;}).join('');return `<div style="display:flex;align-items:center;gap:5px;padding:5px 7px;border-radius:6px;background:var(--card);border:1px solid ${isActive?'rgba(0,112,209,0.5)':'var(--border)'}"><div style="width:15px;height:15px;border-radius:50%;background:${isActive?'var(--blue)':'var(--border)'};color:${isActive?'#fff':'var(--muted)'};font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</div>${g.imgUrl?`<img src="${esc(g.imgUrl)}" style="width:22px;height:29px;object-fit:cover;border-radius:2px;flex-shrink:0" onerror="this.style.opacity='0.2'">` : '<div style="width:22px;height:29px;background:var(--border);border-radius:2px;flex-shrink:0"></div>'}<div style="flex:1;min-width:0;font-size:10px;color:var(--text);overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${esc(g.title.length>16?g.title.slice(0,14)+'…':g.title)}</div><div style="display:flex;gap:2px;align-items:center">${bgBtns}</div><button onclick="event.stopPropagation();_stPickImg(${i})" title="Сменить обложку" style="width:22px;height:29px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--muted);font-size:11px;cursor:pointer;padding:0;flex-shrink:0">🖼</button><div style="display:flex;flex-direction:column;gap:1px;flex-shrink:0"><button onclick="stReorderGame(${i},-1)" ${i===0?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▲</button><button onclick="stReorderGame(${i},1)" ${i===_stG.length-1?'disabled':''} style="width:15px;height:13px;border:1px solid var(--border);border-radius:2px;background:var(--card);color:var(--muted);font-size:8px;cursor:pointer;padding:0;line-height:1">▼</button></div></div>`;}).join('');
 }
 // Список элементов: на телефоне попасть пальцем в объект на канвасе ~200px шириной почти нереально,
 // поэтому выбор идёт строкой списка. Порядок — сверху верхний слой (как в графических редакторах).
@@ -3073,6 +3399,7 @@ function _stRenderLayers(){
 function _stSelectEl(i){if(!_stEls[i]) return;_stSel=i;_stRender();_stRenderSidebar();}
 function _stRenderSidebar(){
   _stRenderLayers();
+  _stSyncHistBtns();
   const el=document.getElementById('st-props');if(!el) return;
   if(_stSel<0||!_stEls[_stSel]){el.innerHTML='<div style="color:var(--muted);font-size:11px;text-align:center;padding:14px 0;line-height:1.8">Выбери элемент в списке выше или тапни его на превью<br><span style="font-size:10px">Тяни фон = панорама · колёсико = зум · Del = удалить · Ctrl+Z = отменить</span></div>';return;}
   const e=_stEls[_stSel];const isOverlay=e.type==='overlay';const isSticker=e.type==='sticker';const isLogo=e.type==='logo';const isQr=e.type==='qr';
@@ -3110,13 +3437,17 @@ function _stProp(k,v){if(_stSel<0) return;_jProp(k,v);_stEls[_stSel][k]=v;_stRen
 function _stPropN(k,v){if(_stSel<0) return;_jProp(k,parseFloat(v));_stEls[_stSel][k]=parseFloat(v);_stRender();}
 function _stPropBg(v){if(_stSel<0) return;_jProp('bgColor',v);_stEls[_stSel].bgColor=v;_stRender();}
 function _stBgColor(hex){if(_stSel<0) return;_jProp('bgColor',hex);_stEls[_stSel].bgColor=hex;const inp=document.querySelector('#st-props input[type="text"][oninput="_stPropBg(this.value)"]');if(inp)inp.value=hex;_stRender();}
-function _stSetLogoUrl(url){if(_stSel<0) return;const el=_stEls[_stSel];if(el.type!=='logo') return;el.logoUrl=url;if(url){const img=new Image();img.onload=()=>{el.imgEl=img;_stRender();};img.onerror=()=>{el.imgEl=null;_stRender();};img.src=url;}else{el.imgEl=null;_stRender();}}
+function _stSetLogoUrl(url){if(_stSel<0) return;const el=_stEls[_stSel];if(el.type!=='logo') return;el.logoUrl=url;if(url){_stLoadElImg(el,url);}else{el.imgEl=null;_stRender();}}
 // ── NEW Template: Горизонт ────────────────────────────────
 function _stTplHorizon(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height,sx=cw/STORY_W;
   const n=Math.min(_stGameCount,_stG.length,3);ctx.clearRect(0,0,cw,ch);
   const g=_stG[0];
-  if(g&&g.imgEl){_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);}else _stRenderTemplateBg(ctx,cw,ch,g);
+  // Выбранный в строке игры фон важнее обложки; если он не выбран — обложка, а без неё общий фон
+  // шаблона (там, в отличие от остальных, настоящие Blur/Glow — кадр ничем не перекрыт)
+  if(g&&g.bg&&g.bg!=='image')_stProcBg(ctx,g.bg,0,0,cw,ch,g);
+  else if(g&&g.imgEl)_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);
+  else _stRenderTemplateBg(ctx,cw,ch,g);
   const vig=ctx.createRadialGradient(cw/2,ch*.42,ch*.06,cw/2,ch*.42,ch*.7);vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(.4,'rgba(0,0,0,0.45)');vig.addColorStop(1,'rgba(0,0,0,0.95)');ctx.fillStyle=vig;ctx.fillRect(0,0,cw,ch);
   const bot=ctx.createLinearGradient(0,ch*.58,0,ch);bot.addColorStop(0,'rgba(4,4,16,0)');bot.addColorStop(1,'rgba(4,4,16,0.97)');ctx.fillStyle=bot;ctx.fillRect(0,ch*.58,cw,ch*.42);
   if(!g)return;
@@ -3125,7 +3456,7 @@ function _stTplHorizon(){
   const dark=_stTextIsDark(g.imgEl,0.36,0.52); // CC-9: меряем полосу обложки под заголовком (~центр кадра), а не всю картинку
   ctx.save();ctx.font='600 '+tfs+"px 'Noto Sans',sans-serif";ctx.fillStyle=dark?'rgba(10,10,18,0.88)':'rgba(255,255,255,0.80)';ctx.shadowColor=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.55)';ctx.shadowBlur=Math.round(6*sx);ctx.textAlign='center';ctx.textBaseline='bottom';
   const tlh=tfs*1.08;
-  const tlines=_wrapLines(ctx,g.title,cw-pad*2,2);
+  const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);
   tlines.forEach((l,li)=>ctx.fillText(l,cw/2,centerY-(tlines.length-1-li)*tlh));ctx.restore();
   if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.shadowColor='rgba(240,192,32,0.50)';ctx.shadowBlur=Math.round(20*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,centerY+Math.round(6*sx));ctx.restore();}
   if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
@@ -3134,7 +3465,7 @@ function _stTplHorizon(){
     const totalW=extras*mw+(extras-1)*Math.round(12*sx);let mx=Math.round((cw-totalW)/2);
     for(let i=1;i<=extras;i++){
       const gi=_stG[i];ctx.save();ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.clip();
-      if(gi&&gi.imgEl)_stImgRect(ctx,gi.imgEl,mx,my,mw,mh);else{const grd=ctx.createLinearGradient(mx,my,mx,my+mh);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(mx,my,mw,mh);}ctx.restore();
+      _stCoverOrBg(ctx,mx,my,mw,mh,gi,false);ctx.restore();
       ctx.save();ctx.strokeStyle='rgba(255,255,255,0.22)';ctx.lineWidth=1;ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.stroke();ctx.restore();
       if(gi&&gi.priceRUB){const pf=Math.max(Math.round(26*sx),9);ctx.save();ctx.font='700 '+pf+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(gi.priceRUB.toLocaleString('ru')+' ₽',mx+mw/2,my+mh+Math.round(6*sx));ctx.restore();}
       mx+=mw+Math.round(12*sx);
@@ -3143,7 +3474,8 @@ function _stTplHorizon(){
   // без мини-обложек описание подтягиваем прямо под цену — иначе оно висело отдельной строкой у
   // нижнего края, оторванное от блока с названием и ценой (раньше это скрывала собственная плашка)
   const qr=_stCornerQr(ctx,cw,ch,g);
-  const dY=n>1?Math.round(ch*.88):Math.round(centerY+pfs+Math.round(20*sx));
+  const _dH=_stDrawDescZone(ctx,0,0,cw,g,true); // блок описания вырос — низ кадра держим свободным
+  const dY=n>1?Math.min(Math.round(ch*.88),Math.round(ch-_dH-ch*.02)):Math.round(centerY+pfs+Math.round(20*sx));
   if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
@@ -3161,7 +3493,7 @@ function _stTplNeon(){
   const covW=Math.round(cw*(_nMulti?.56:.72)),covH=Math.round(covW*4/3),covX=Math.round((cw-covW)/2),covY=Math.round(ch*(_nMulti?.13:.18));
   for(let i=3;i>=1;i--){ctx.save();ctx.strokeStyle='rgba(0,220,195,'+(0.055*i)+')';ctx.lineWidth=2+i*2.5;ctx.shadowColor='#00dcc0';ctx.shadowBlur=9*i;ctx.beginPath();ctx.roundRect(covX-i*5,covY-i*5,covW+i*10,covH+i*10,Math.round(6*sx));ctx.stroke();ctx.restore();}
   ctx.save();ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.clip();
-  if(g&&g.imgEl)_stImgRect(ctx,g.imgEl,covX,covY,covW,covH,g.transform);else{const grd=ctx.createLinearGradient(covX,covY,covX,covY+covH);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(covX,covY,covW,covH);}ctx.restore();
+  _stCoverOrBg(ctx,covX,covY,covW,covH,g,true);ctx.restore();
   ctx.save();ctx.strokeStyle='rgba(0,220,195,0.62)';ctx.lineWidth=1.5;ctx.shadowColor='#00dcc0';ctx.shadowBlur=7;ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.stroke();ctx.restore();
   [[ch*0.088,'rgba(0,200,255,0.13)'],[ch*0.112,'rgba(200,0,240,0.09)']].forEach(function(pair){ctx.save();ctx.strokeStyle=pair[1];ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,pair[0]);ctx.lineTo(cw,pair[0]);ctx.stroke();ctx.restore();});
   if(!g)return;
@@ -3175,8 +3507,7 @@ function _stTplNeon(){
     for(let i=1;i<=extras;i++){
       const gi=_stG[i];
       ctx.save();ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.clip();
-      if(gi&&gi.imgEl)_stImgRect(ctx,gi.imgEl,mx,my,mw,mh);
-      else{const grd=ctx.createLinearGradient(mx,my,mx,my+mh);grd.addColorStop(0,'#1a1a3a');grd.addColorStop(1,'#0a0a20');ctx.fillStyle=grd;ctx.fillRect(mx,my,mw,mh);}
+      _stCoverOrBg(ctx,mx,my,mw,mh,gi,false);
       ctx.restore();
       ctx.save();ctx.strokeStyle='rgba(0,220,195,0.5)';ctx.lineWidth=1.2;ctx.shadowColor='#00dcc0';ctx.shadowBlur=5;ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.stroke();ctx.restore();
       if(gi&&gi.priceRUB){const pf=Math.max(Math.round(20*sx),9);ctx.save();ctx.font='700 '+pf+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(gi.priceRUB.toLocaleString('ru')+' ₽',mx+mw/2,my+mh+Math.round(4*sx));ctx.restore();}
@@ -3186,10 +3517,13 @@ function _stTplNeon(){
   const tfs=Math.max(38*sx,12);
   ctx.save();ctx.font='600 '+tfs+"px 'Noto Sans',sans-serif";ctx.fillStyle='rgba(255,255,255,0.75)';ctx.textAlign='center';ctx.textBaseline='bottom';
   const tlh=tfs*1.08,tAnchor=covY-Math.round(12*sx);
-  const tlines=_wrapLines(ctx,g.title,cw-Math.round(40*sx),2);
+  const tlines=_wrapLines(ctx,g.title,cw-Math.round(40*sx),3);
   tlines.forEach((l,li)=>ctx.fillText(l,cw/2,tAnchor-(tlines.length-1-li)*tlh));ctx.restore();
   const qr=_stCornerQr(ctx,cw,ch,g);
-  const dY=Math.round(ch*.88);
+  // описание теперь может вырасти до 4 строк — прижимаем его к низу кадра, а не держим на
+  // фиксированных 88%: иначе выросший блок упирался бы в край и наезжал на цену
+  const _dH=_stDrawDescZone(ctx,0,0,cw,g,true);
+  const dY=Math.min(Math.round(ch*.88),Math.round(ch-_dH-ch*.02));
   if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
