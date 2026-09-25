@@ -401,7 +401,7 @@
           <div id="st-cap-out" class="opanel" style="display:none;margin-top:8px">
             <div class="ot">ТЕКСТ К СТОРИС:</div>
             <textarea id="st-cap-text" rows="7" oninput="_stCapText=this.value;_jStCapTouched()" title="Текст сгенерирован ИИ, но правится вручную — копируется то, что видишь. Запись [Название](ссылка) при копировании превращается в кликабельную ссылку на карточку игры." style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;line-height:1.45;padding:8px;resize:vertical;font-family:inherit;outline:none"></textarea>
-            <div style="font-size:10px;color:var(--muted);margin-top:4px">[Название](ссылка) — так выглядит ссылка на карточку игры. При копировании скобки исчезают, название становится кликабельным.</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:4px">[Название](ссылка) — так выглядит ссылка на карточку игры. При копировании скобки исчезают, название становится кликабельным.<br>📱 На Android вставляй долгим нажатием на поле → «Вставить», а не из буфера клавиатуры — иначе ссылка встанет рядом с названием.</div>
             <div class="bf2" style="margin-top:6px"><button class="bf grn" onclick="_stCopyCap()">📋 Копировать</button></div>
           </div>
         </div>
@@ -2176,11 +2176,18 @@ function _stQrMissing(list){
 // Один QR главной игры в правом нижнем углу — для шаблонов, где у остальных игр нет своего
 // текстового блока (Постер/Диагональ/Горизонт/Неон): мини-обложки там мельче порога сканируемости.
 // res — ширина, которую после этого нельзя занимать нижним текстом.
+// Безопасная зона снизу для Telegram: свёрнутая подпись сторис («…Показать больше») ложится поверх
+// нижней части кадра. Замер по скриншоту с Android (25.09.2026): подпись в 3 строки закрывает ~11%
+// высоты кадра — под неё уходили описание и QR. 14% = 11% + запас. Фон и обложка по-прежнему идут
+// до края, в зону не кладём только текст, цены, плашки контента и коды. Для ВК зоны нет.
+const ST_TG_SAFE_BOT=0.14;
+function _stSafeB(ch){ return _stPlatform==='tg'?Math.round(ch*ST_TG_SAFE_BOT):0; }
+function _stFloor(ch){ return ch-_stSafeB(ch); }
 function _stCornerQr(ctx,cw,ch,g){
-  const img=_stQrImg(g);
-  if(!img) return {res:0,top:ch,bot:ch,draw(){}};
+  const img=_stQrImg(g),fl=_stFloor(ch);
+  if(!img) return {res:0,top:fl,bot:fl,draw(){}};
   const s=Math.round(Math.min(cw,ch)*0.115),p=Math.round(Math.min(cw,ch)*0.03),wp=Math.round(s*0.07);
-  return {res:s+p*2,top:ch-p-s-wp,bot:ch-p+wp,draw(){_stDrawQr(ctx,img,cw-p-s,ch-p-s,s);}};
+  return {res:s+p*2,top:fl-p-s-wp,bot:fl-p+wp,draw(){_stDrawQr(ctx,img,cw-p-s,fl-p-s,s);}};
 }
 // Сужать описание под код имеет смысл только там, где полосы реально пересекаются по вертикали:
 // иначе текст обрезался бы многоточием на ровном месте — описание либо выше кода (Горизонт с одной
@@ -2193,7 +2200,7 @@ function _stDescHitsQr(ctx,g,y,qrTop,qrBot,w,maxLines){
   if(!_stDescOn||!g||!_stShortDescs[g.title])return false;
   const bh=_stDrawDescZone(ctx,0,0,w,g,true,maxLines);
   if(!bh)return false;
-  const yy=Math.max(0,Math.min(y,ctx.canvas.height-bh));
+  const yy=Math.max(0,Math.min(y,_stFloor(ctx.canvas.height)-bh));
   return yy<qrBot&&yy+bh>qrTop;
 }
 // Белая подложка обязательна: код на тёмной плашке сканером не читается.
@@ -2567,10 +2574,14 @@ function _stImgRectRaw(ctx,img,x,y,w,h,t){
   else{sw=img.width;sh=sw/sr;sx=0;sy=(img.height-sh)/2;}
   ctx.drawImage(img,sx,sy,sw,sh,x,y,w,h);
 }
-function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
+// inset — нижняя безопасная зона внутри карточки (только у карточек, стоящих у нижнего края кадра).
+// Обложка и плашка доходят до края, а всё содержимое карточки раскладывается в высоте h-inset:
+// тёмная плашка под подписью Telegram заодно делает саму подпись читаемее.
+function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc,inset){
   const sx=ctx.canvas.width/STORY_W;
   _stCoverOrBg(ctx,x,y,w,h,g,true);
   if(!g)return;
+  inset=inset||0;const hFull=h;h-=inset;
   const pad=Math.round(18*sx),tfs=Math.max(34*sx,14),pfs=Math.max(52*sx,18),tlh=tfs*1.15;
   // QR на карточку игры — у правого края плашки. Размер считаем от базовой высоты плашки (30% слота),
   // а не от итоговой: итоговая зависит от переносов текста, а ширина текста — от того, есть ли QR.
@@ -2601,8 +2612,8 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc){
   // Высота плашки — те же ~30% слота; растёт только если контент физически не влезает (мини-карточки).
   const baseH=Math.round(h*0.30),needH=Math.round(14*sx)*2+titleH+descH+pfs+Math.round(18*sx);
   const cardH=Math.max(baseH,Math.min(Math.round(h*0.52),needH)),cardY=y+h-cardH;
-  if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.92)';ctx.fillRect(x,cardY,w,cardH);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,cardY,w,Math.max(3,Math.round(3*sx)));}
-  else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,cardY-Math.round(cardH*.6),0,y+h);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.82)');grd.addColorStop(1,'rgba(8,8,20,.97)');ctx.fillStyle=grd;ctx.fillRect(x,cardY-Math.round(cardH*.6),w,cardH+Math.round(cardH*.6));}
+  if(_stCardStyle==='dark'){ctx.fillStyle='rgba(8,8,20,0.92)';ctx.fillRect(x,cardY,w,cardH+inset);ctx.fillStyle='rgba(0,112,209,0.9)';ctx.fillRect(x,cardY,w,Math.max(3,Math.round(3*sx)));}
+  else if(_stCardStyle==='gradient'){const grd=ctx.createLinearGradient(0,cardY-Math.round(cardH*.6),0,y+hFull);grd.addColorStop(0,'rgba(8,8,20,0)');grd.addColorStop(.4,'rgba(8,8,20,.82)');grd.addColorStop(1,'rgba(8,8,20,.97)');ctx.fillStyle=grd;ctx.fillRect(x,cardY-Math.round(cardH*.6),w,cardH+inset+Math.round(cardH*.6));}
   // 'minimal' — плашку не рисуем вообще, текст ниже идёт по обложке с тенью
   // Контент распределён по всей высоте плашки (как в коллаже): название у верхней кромки, цена и
   // бейдж скидки — у нижней, описание — по центру свободного места между ними. Иначе текст жался
@@ -2631,7 +2642,7 @@ const ST_DESC_MAX_LINES=4;
 // и раньше, до роста блока.
 function _stDescLinesFor(ctx,y){
   const sx=ctx.canvas.width/STORY_W,lh=Math.max(34*sx,12)*1.4;
-  return Math.max(2,Math.min(ST_DESC_MAX_LINES,Math.floor((ctx.canvas.height-y-Math.round(32*sx))/lh)));
+  return Math.max(2,Math.min(ST_DESC_MAX_LINES,Math.floor((_stFloor(ctx.canvas.height)-y-Math.round(32*sx))/lh)));
 }
 function _stDrawDescZone(ctx,x,y,w,g,measureOnly,maxLines){
   if(!_stDescOn||!g||!_stShortDescs[g.title])return 0;
@@ -2641,7 +2652,7 @@ function _stDrawDescZone(ctx,x,y,w,g,measureOnly,maxLines){
     maxLines:Math.max(1,Math.min(ST_DESC_MAX_LINES,maxLines||ST_DESC_MAX_LINES)),font:f=>`${f}px 'Noto Sans',sans-serif`});
   const barH=fit.h+pad*2;
   if(measureOnly){ctx.restore();return barH;} // вызывающий шаблон сначала меряет блок, потом верстает от него
-  y=Math.max(0,Math.min(y,ctx.canvas.height-barH)); // CC-6: не выпускать зону описания за нижний край холста (Каскад n=3)
+  y=Math.max(0,Math.min(y,_stFloor(ctx.canvas.height)-barH)); // CC-6: не выпускать зону описания за нижний край (Каскад n=3); в TG край — граница безопасной зоны
   // Своей подложки у описания больше нет: во всех шаблонах оно ложится либо на тёмную карточку,
   // либо на затемнённый низ фона — вторая тёмная плашка поверх первой читалась как лишний прямоугольник.
   ctx.fillStyle='rgba(200,200,220,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
@@ -2759,7 +2770,8 @@ function _stTplPoster(){
   ctx.clearRect(0,0,cw,ch);
   const g=_stG[0];
   _stCoverOrBg(ctx,0,0,cw,ch,g,true);
-  const oh=Math.round(ch*.50),grd=ctx.createLinearGradient(0,ch-oh,0,ch);
+  const sb=_stSafeB(ch);
+  const oh=Math.round(ch*.50)+sb,grd=ctx.createLinearGradient(0,ch-oh,0,ch); // затемнение поднимается вместе с текстом
   grd.addColorStop(0,'rgba(4,4,16,0)');grd.addColorStop(.4,'rgba(4,4,16,.7)');grd.addColorStop(1,'rgba(4,4,16,.97)');
   ctx.fillStyle=grd;ctx.fillRect(0,ch-oh,cw,oh);
   if(!g)return;
@@ -2772,7 +2784,7 @@ function _stTplPoster(){
   ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);ctx.restore();
   const descH=hasDesc?_stDrawDescZone(ctx,0,0,cw-qr.res,g,true):0;
   const blockH=tlines.length*tlh+Math.round(10*sx)+pfs+(descH?descH:0);
-  const blockTop=Math.round(ch-Math.round(ch*.055)-blockH);
+  const blockTop=Math.round(ch-Math.max(Math.round(ch*.055),sb)-blockH);
   ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';
   tlines.forEach((l,li)=>ctx.fillText(l,pad,blockTop+li*tlh));ctx.restore();
   const priceY=blockTop+tlines.length*tlh+Math.round(10*sx);
@@ -2784,9 +2796,12 @@ function _stTplPoster(){
 function _stTplCard1(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height;
   const n=Math.min(_stGameCount,_stG.length,3);ctx.clearRect(0,0,cw,ch);
-  const slotH=ch/n;
+  // слоты делят кадр БЕЗ безопасной зоны — так у всех карточек одинаковая полезная высота,
+  // а нижняя просто дотягивает обложку и плашку до края
+  const sb=_stSafeB(ch),slotH=(ch-sb)/n;
   for(let i=0;i<n;i++){
-    _stDrawCoverCard(ctx,0,i*slotH,cw,slotH,_stG[i],i===Math.min(_stDescGame,n-1));
+    const last=i===n-1;
+    _stDrawCoverCard(ctx,0,i*slotH,cw,last?ch-i*slotH:slotH,_stG[i],i===Math.min(_stDescGame,n-1),last?sb:0);
     if(i<n-1){ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,(i+1)*slotH);ctx.lineTo(cw,(i+1)*slotH);ctx.stroke();}
   }
 }
@@ -2794,13 +2809,14 @@ function _stTplHero(){
   const ctx=_stCtx,cw=_stCanvas.width,ch=_stCanvas.height;
   const n=Math.min(_stGameCount,_stG.length,3);ctx.clearRect(0,0,cw,ch);
   if(n===1){_stTplPoster();return;}
+  const sb=_stSafeB(ch),chL=ch-sb; // пропорции считаем от кадра без зоны, нижний ряд дотягиваем до края
   if(n===2){
-    const h0=Math.round(ch*.58),h1=ch-h0,dg=Math.min(_stDescGame,1);
-    _stDrawCoverCard(ctx,0,0,cw,h0,_stG[0],dg===0);_stDrawCoverCard(ctx,0,h0,cw,h1,_stG[1],dg===1);
+    const h0=Math.round(chL*.58),h1=ch-h0,dg=Math.min(_stDescGame,1);
+    _stDrawCoverCard(ctx,0,0,cw,h0,_stG[0],dg===0);_stDrawCoverCard(ctx,0,h0,cw,h1,_stG[1],dg===1,sb);
     ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,h0);ctx.lineTo(cw,h0);ctx.stroke();
   } else {
-    const h0=Math.round(ch*.55),hb=ch-h0,w2=Math.round(cw/2),dg=Math.min(_stDescGame,2);
-    _stDrawCoverCard(ctx,0,0,cw,h0,_stG[0],dg===0);_stDrawCoverCard(ctx,0,h0,w2,hb,_stG[1],dg===1);_stDrawCoverCard(ctx,w2,h0,cw-w2,hb,_stG[2],dg===2);
+    const h0=Math.round(chL*.55),hb=ch-h0,w2=Math.round(cw/2),dg=Math.min(_stDescGame,2);
+    _stDrawCoverCard(ctx,0,0,cw,h0,_stG[0],dg===0);_stDrawCoverCard(ctx,0,h0,w2,hb,_stG[1],dg===1,sb);_stDrawCoverCard(ctx,w2,h0,cw-w2,hb,_stG[2],dg===2,sb);
     ctx.strokeStyle='rgba(255,255,255,0.15)';ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(0,h0);ctx.lineTo(cw,h0);ctx.stroke();
     ctx.beginPath();ctx.moveTo(w2,h0);ctx.lineTo(w2,ch);ctx.stroke();
@@ -2874,7 +2890,8 @@ function _stTplDiag(){
   const qr=_stCornerQr(ctx,cw,ch,g); // мини-обложки внизу центрированы, угол свободен
   // Блок прижат к bottomLimit, поэтому до кода он дотягивается только при одной игре:
   // с мини-обложками низ блока уходит выше кода, и сужать описание там незачем.
-  const bottomLimit=n>1?ch-Math.round(ch*.15)-pad:ch-Math.round(ch*.05);
+  const sb=_stSafeB(ch),miniH=Math.round(ch*.15),miniY=ch-sb-miniH; // мини-обложки тоже над зоной — у них цена
+  const bottomLimit=n>1?miniY-pad:ch-Math.max(Math.round(ch*.05),sb);
   const qrRes=bottomLimit>qr.top?qr.res:0;
   const dscH=(_stDescOn&&_stShortDescs[g.title])?_stDrawDescZone(ctx,0,0,cw-qrRes,g,true):0;
   const blockH=titleH+Math.round(10*sx)+pfs+dscH;
@@ -2884,7 +2901,7 @@ function _stTplDiag(){
   if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',pad,infoY+titleH+Math.round(10*sx));ctx.restore();}
   if(g.discount){const bfs=Math.max(Math.round(32*sx),11),bw=Math.round(110*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(dscH)_stDrawDescZone(ctx,0,infoY+titleH+Math.round(10*sx)+pfs,cw-qrRes,g);
-  if(n>1){const miniH=Math.round(ch*.15),maxMiniW=Math.round(miniH*.78),miniW=Math.min(Math.round(cw/(n-1)),maxMiniW),totalW=miniW*(n-1),startX=Math.round((cw-totalW)/2);for(let i=1;i<n;i++)_stDrawCoverCard(ctx,startX+(i-1)*miniW,ch-miniH,miniW,miniH,_stG[i]);}
+  if(n>1){const maxMiniW=Math.round(miniH*.78),miniW=Math.min(Math.round(cw/(n-1)),maxMiniW),totalW=miniW*(n-1),startX=Math.round((cw-totalW)/2);for(let i=1;i<n;i++)_stDrawCoverCard(ctx,startX+(i-1)*miniW,miniY,miniW,miniH,_stG[i]);}
   qr.draw();
 }
 function _stTplCascade(){
@@ -2892,9 +2909,10 @@ function _stTplCascade(){
   const n=Math.min(_stGameCount,_stG.length,3);ctx.clearRect(0,0,cw,ch);
   _stRenderTemplateBg(ctx,cw,ch,_stG[0]);
   const cardW=Math.round(cw*.78),cardH=Math.round(cw*.78);
-  const step=n===1?0:Math.round((ch-cardH-Math.round(ch*.10))/(n-1));
+  const chL=_stFloor(ch); // каскад центрируем в кадре без нижней зоны
+  const step=n===1?0:Math.round((chL-cardH-Math.round(ch*.10))/(n-1));
   const totalH=cardH+(n-1)*step;
-  const startY=Math.round((ch-totalH)/2);
+  const startY=Math.round((chL-totalH)/2);
   const dxArr=n===1?[0]:n===2?[-Math.round(cw*.05),Math.round(cw*.05)]:[-Math.round(cw*.07),0,Math.round(cw*.07)];
   let lastQrLeft=cw,lastQrTop=ch,lastQrBot=ch; // код нижней карточки: описание может лечь прямо на него
   for(let i=n-1;i>=0;i--){
@@ -3525,7 +3543,8 @@ function _stTplHorizon(){
   const bot=ctx.createLinearGradient(0,ch*.58,0,ch);bot.addColorStop(0,'rgba(4,4,16,0)');bot.addColorStop(1,'rgba(4,4,16,0.97)');ctx.fillStyle=bot;ctx.fillRect(0,ch*.58,cw,ch*.42);
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(42*sx,14),pfs=Math.max(Math.round(90*sx),28);
-  const centerY=Math.round(ch*.50);
+  // В TG композиция приподнята: иначе описание, прижатое к границе безопасной зоны, въезжало в мини-обложки
+  const sb=_stSafeB(ch),centerY=Math.round(ch*.50-sb*0.4);
   const dark=_stTextIsDark(g.imgEl,0.36,0.52); // CC-9: меряем полосу обложки под заголовком (~центр кадра), а не всю картинку
   ctx.save();ctx.font='600 '+tfs+"px 'Noto Sans',sans-serif";ctx.fillStyle=dark?'rgba(10,10,18,0.88)':'rgba(255,255,255,0.80)';ctx.shadowColor=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.55)';ctx.shadowBlur=Math.round(6*sx);ctx.textAlign='center';ctx.textBaseline='bottom';
   const tlh=tfs*1.08;
@@ -3534,7 +3553,9 @@ function _stTplHorizon(){
   if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.shadowColor='rgba(240,192,32,0.50)';ctx.shadowBlur=Math.round(20*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,centerY+Math.round(6*sx));ctx.restore();}
   if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(n>1){
-    const extras=Math.min(n-1,2),mw=Math.round(cw*(extras===1?.26:.20)),mh=Math.round(mw*4/3),my=Math.round(ch*.62);
+    // В TG одиночная мини-обложка тоже 20%: при 26% её низ с ценой (~1463) уходил под описание в 4 строки,
+    // прижатое к границе зоны (~1391) — подъёма композиции на sb*0.5 не хватало
+    const extras=Math.min(n-1,2),mw=Math.round(cw*(extras===1&&!sb?.26:.20)),mh=Math.round(mw*4/3),my=Math.round(ch*.62-sb*0.5);
     const totalW=extras*mw+(extras-1)*Math.round(12*sx);let mx=Math.round((cw-totalW)/2);
     for(let i=1;i<=extras;i++){
       const gi=_stG[i];ctx.save();ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.clip();
@@ -3548,7 +3569,7 @@ function _stTplHorizon(){
   // нижнего края, оторванное от блока с названием и ценой (раньше это скрывала собственная плашка)
   const qr=_stCornerQr(ctx,cw,ch,g);
   const _dH=_stDrawDescZone(ctx,0,0,cw,g,true); // блок описания вырос — низ кадра держим свободным
-  const dY=n>1?Math.min(Math.round(ch*.88),Math.round(ch-_dH-ch*.02)):Math.round(centerY+pfs+Math.round(20*sx));
+  const dY=n>1?Math.min(Math.round(ch*.88),Math.round(_stFloor(ch)-_dH-ch*.02)):Math.round(centerY+pfs+Math.round(20*sx));
   if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
@@ -3563,7 +3584,9 @@ function _stTplNeon(){
   const cen1=ctx.createRadialGradient(cw*.15,ch*.12,0,cw*.15,ch*.12,cw*.6);cen1.addColorStop(0,gc+'0.12)');cen1.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=cen1;ctx.fillRect(0,0,cw,ch);
   const cen2=ctx.createRadialGradient(cw*.85,ch*.88,0,cw*.85,ch*.88,cw*.5);cen2.addColorStop(0,'rgba(180,0,240,0.10)');cen2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=cen2;ctx.fillRect(0,0,cw,ch);
   const _nMulti=n>1; // CC-7: при нескольких играх главная обложка меньше и выше — освобождает место под крупные мини
-  const covW=Math.round(cw*(_nMulti?.56:.72)),covH=Math.round(covW*4/3),covX=Math.round((cw-covW)/2),covY=Math.round(ch*(_nMulti?.13:.18));
+  // В TG обложка поменьше: цене и описанию нужно уместиться над безопасной зоной снизу
+  const sb=_stSafeB(ch);
+  const covW=Math.round(cw*(_nMulti?(sb?.50:.56):(sb?.62:.72))),covH=Math.round(covW*4/3),covX=Math.round((cw-covW)/2),covY=Math.round(ch*(_nMulti?.13:.18));
   for(let i=3;i>=1;i--){ctx.save();ctx.strokeStyle='rgba(0,220,195,'+(0.055*i)+')';ctx.lineWidth=2+i*2.5;ctx.shadowColor='#00dcc0';ctx.shadowBlur=9*i;ctx.beginPath();ctx.roundRect(covX-i*5,covY-i*5,covW+i*10,covH+i*10,Math.round(6*sx));ctx.stroke();ctx.restore();}
   ctx.save();ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.clip();
   _stCoverOrBg(ctx,covX,covY,covW,covH,g,true);ctx.restore();
@@ -3571,7 +3594,11 @@ function _stTplNeon(){
   [[ch*0.088,'rgba(0,200,255,0.13)'],[ch*0.112,'rgba(200,0,240,0.09)']].forEach(function(pair){ctx.save();ctx.strokeStyle=pair[1];ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,pair[0]);ctx.lineTo(cw,pair[0]);ctx.stroke();ctx.restore();});
   if(!g)return;
   const pfs=Math.max(Math.round(76*sx),24);
-  if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor='rgba(240,192,32,0.60)';ctx.shadowBlur=Math.round(18*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,Math.round(ch*(_nMulti?.76:.84)));ctx.restore();}
+  // Без зоны цена стоит на прежних 76/84%. С зоной — сразу под обложкой (или под мини-обложками с их ценой):
+  // на 84% она оказывалась ниже описания, прижатого к границе зоны.
+  const _miniBot=covY+covH+Math.round(14*sx)+Math.round(ch*.12)+Math.round(4*sx)+Math.max(Math.round(20*sx),9);
+  const priceCY=!sb?Math.round(ch*(_nMulti?.76:.84)):Math.round((_nMulti?_miniBot:covY+covH)+Math.round(22*sx)+pfs/2);
+  if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='middle';ctx.shadowColor='rgba(240,192,32,0.60)';ctx.shadowBlur=Math.round(18*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,priceCY);ctx.restore();}
   if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(n>1){
     const extras=Math.min(n-1,2),mh=Math.round(ch*.12),mw=Math.round(mh*.78),gap=Math.round(14*sx); // CC-7: мини-обложки крупнее и читаемее
@@ -3596,7 +3623,7 @@ function _stTplNeon(){
   // описание теперь может вырасти до 4 строк — прижимаем его к низу кадра, а не держим на
   // фиксированных 88%: иначе выросший блок упирался бы в край и наезжал на цену
   const _dH=_stDrawDescZone(ctx,0,0,cw,g,true);
-  const dY=Math.min(Math.round(ch*.88),Math.round(ch-_dH-ch*.02));
+  const dY=Math.min(Math.round(ch*.88),Math.round(_stFloor(ch)-_dH-ch*.02));
   if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
