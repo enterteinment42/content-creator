@@ -264,6 +264,14 @@
         <button id="cl-bg-glow" onclick="_stSetCollageBgStyle('glow')" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card2);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Glow</button>
         <button id="cl-bg-grain" onclick="_stSetCollageBgStyle('grain')" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card2);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Зерно</button>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Кадр:</span>
+        <button id="cl-fit-cover" onclick="_collSetFit('cover')" title="Обложка заполняет ячейку, лишнее обрезается" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card2);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Заполнить</button>
+        <button id="cl-fit-contain" onclick="_collSetFit('contain')" title="Обложка видна целиком, поля — её размытая копия" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card2);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Целиком</button>
+        <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-left:8px">Неон:</span>
+        <button id="cl-neon" onclick="_collSetNeon(!_collNeon)" title="Светящийся контур вокруг каждой обложки" style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);background:var(--card2);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Выкл</button>
+        <input type="color" id="cl-neon-color" title="Цвет неона" oninput="_collSetNeonColor(this.value)" style="width:28px;height:20px;padding:0;border:none;cursor:pointer;background:none;vertical-align:middle">
+      </div>
       <div id="coll-tz-area" style="min-height:28px;margin-bottom:8px;display:flex;align-items:center"></div>
       <div id="coll-card-opts" style="display:none;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px">
         <div style="display:flex;align-items:center;gap:6px">
@@ -370,6 +378,19 @@
             <span style="font-size:10px;color:var(--muted)">Сила</span>
             <input type="range" id="st-imgf-amt" min="0" max="100" step="5" oninput="_stSetImgFilterAmt(this.value)" style="flex:1;accent-color:var(--blue);cursor:pointer">
             <span id="st-imgf-amt-val" style="font-size:10px;color:var(--muted);min-width:32px;text-align:right">70%</span>
+          </div>
+        </div>
+        <!-- Cover frame: fit + neon -->
+        <div>
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Обложка в кадре</div>
+          <div style="display:flex;gap:6px">
+            <button id="st-fit-cover" onclick="_stSetFit('cover')" title="Обложка заполняет место, лишнее обрезается" style="flex:1;padding:5px 6px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Заполнить</button>
+            <button id="st-fit-contain" onclick="_stSetFit('contain')" title="Обложка видна целиком, поля — её размытая копия" style="flex:1;padding:5px 6px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Целиком</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:6px">
+            <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Неон</span>
+            <button id="st-neon" onclick="_stSetNeon(!_stNeonOn)" title="Светящийся контур вокруг каждой обложки. В шаблоне «Неон» свечение встроено — там меняется только цвет" style="padding:5px 12px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Выкл</button>
+            <input type="color" id="st-neon-color" title="Цвет неона (и свечения шаблона «Неон»)" oninput="_stSetNeonColor(this.value)" style="width:28px;height:24px;padding:0;border:none;cursor:pointer;background:none">
           </div>
         </div>
         <!-- Logo URL -->
@@ -934,7 +955,8 @@ function removeCustomItem(cid) {
 // ── Пресеты бренда ─────────────────────────────────────────
 // Именованный снимок всех «брендовых» localStorage-ключей: шапка/подвал поста, лого (URL/позиция/
 // форма), цвета коллажа, фоны, шаблон сторис. Разные каналы (PS-игры / консоли / …) — разные пресеты.
-const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on','cc_img_filter','cc_img_filter_amt'];
+const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on','cc_img_filter','cc_img_filter_amt','cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color'];
+const BRAND_KEYS_LATE = new Set(['cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color']);
 function _brandList() { try { return JSON.parse(localStorage.getItem('cc_brand_presets') || '{}'); } catch(_) { return {}; } }
 function _brandRenderSel() {
   const sel = document.getElementById('brand-sel'); if (!sel) return;
@@ -957,7 +979,9 @@ function brandApply(name) {
   if (!name) { localStorage.removeItem('cc_brand_current'); return; }
   const snap = _brandList()[name]; if (!snap) { jError('brand_apply', 'пресет не найден', { name }); showToast('Пресет не найден'); return; }
   jEvent('used', { feature: 'brandApply', name });
-  BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else localStorage.removeItem(k); });
+  // Ключи, добавленные позже (неон и кадр, 28.09.2026), в старых пресетах отсутствуют — их не стираем,
+  // иначе применение старого пресета молча гасило бы неон и «Целиком».
+  BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else if (!BRAND_KEYS_LATE.has(k)) localStorage.removeItem(k); });
   localStorage.setItem('cc_brand_current', name);
   _brandApplyLive();
   showToast(`✅ Бренд «${name}» применён`);
@@ -977,12 +1001,16 @@ function _brandApplyLive() {
   _stQrOn = localStorage.getItem('cc_qr_on') !== '0';
   _stImgFilter = localStorage.getItem('cc_img_filter') || 'none';
   _stImgFilterAmt = _stReadFilterAmt();
+  _stFit = localStorage.getItem('cc_st_fit') === 'contain' ? 'contain' : 'cover';
+  _stNeonOn = localStorage.getItem('cc_st_neon') === '1'; _stNeonColor = _ccReadColor('cc_st_neon_color');
+  _collFit = localStorage.getItem('cc_coll_fit') === 'contain' ? 'contain' : 'cover';
+  _collNeon = localStorage.getItem('cc_coll_neon') === '1'; _collNeonColor = _ccReadColor('cc_coll_neon_color');
   _stLogoImg = null; _collageLogoImg = null;
   if (_stLogoUrl) { const img = new Image(); img.crossOrigin = 'anonymous'; img.onload = () => { _stLogoImg = img; if (document.getElementById('story-modal')?.classList.contains('open')) _stRedrawCurrent(); }; img.src = _stLogoUrl; }
   loadTgTemplate();
   const fcEl = document.getElementById('cc-frame-color'); if (fcEl) fcEl.value = _frameColor;
   const bcEl = document.getElementById('cc-bg-color'); if (bcEl) bcEl.value = _bgColor;
-  if (document.getElementById('coll-modal')?.classList.contains('open')) { _preloadCollageLogo(); redrawPreview(); }
+  if (document.getElementById('coll-modal')?.classList.contains('open')) { _preloadCollageLogo(); _collSyncFrameCtl(); collageCovers.forEach((_, i) => drawSlot(i)); redrawPreview(); }
   if (document.getElementById('story-modal')?.classList.contains('open')) {
     const luInp = document.getElementById('st-logo-url'); if (luInp) luInp.value = localStorage.getItem('cc_logo_url') || '';
     const lsSel = document.getElementById('st-logo-shape'); if (lsSel) lsSel.value = _logoShape;
@@ -1712,6 +1740,7 @@ function openCollage(){
   _updateSlotBar();
   const fcEl=document.getElementById('cc-frame-color');if(fcEl)fcEl.value=_frameColor;
   const bcEl=document.getElementById('cc-bg-color');if(bcEl)bcEl.value=_bgColor;
+  _collSyncFrameCtl();
   document.fonts.ready.then(()=>{if(document.getElementById('coll-modal').classList.contains('open'))redrawPreview();});
 }
 function renderCollageSlots(){
@@ -1769,7 +1798,7 @@ document.addEventListener('keydown',e=>{
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='y'){e.preventDefault();stRedo();return;}
   }
 });
-function drawSlot(i){const canvas=document.getElementById(`sc-${i}`);if(!canvas) return;const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#0e0e1c';ctx.fillRect(0,0,W,H);if(!collageCovers[i].imgEl) return;initT(i);const t=collageCovers[i].transform,img=collageCovers[i].imgEl;const cell=_previewCells[i];const sx=cell?W/cell.w:1,sy=cell?H/cell.h:1;const base=Math.max(W/img.naturalWidth,H/img.naturalHeight);const s=base*t.scale;ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();ctx.drawImage(img,(W-img.naturalWidth*s)/2+t.ox*sx,(H-img.naturalHeight*s)/2+t.oy*sy,img.naturalWidth*s,img.naturalHeight*s);ctx.restore();}
+function drawSlot(i){const canvas=document.getElementById(`sc-${i}`);if(!canvas) return;const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;ctx.clearRect(0,0,W,H);ctx.fillStyle='#0e0e1c';ctx.fillRect(0,0,W,H);if(!collageCovers[i].imgEl) return;initT(i);const t=collageCovers[i].transform,img=collageCovers[i].imgEl;const cell=_previewCells[i];const sx=cell?W/cell.w:1,sy=cell?H/cell.h:1;ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();_ccDrawImgBox(ctx,img,0,0,W,H,t.scale,t.ox*sx,t.oy*sy,_collFit==='contain');ctx.restore();}
 function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Math.min(5,collageCovers[i].transform.scale+d));drawSlot(i);redrawPreview();
   // Схлопнуто: колесо мыши и pinch шлют это десятками раз за жест.
   jAgg('slotzoom'+i,'slot_transform',{slot:i,what:'zoom',title:collageCovers[i]?.title},undefined,+collageCovers[i].transform.scale.toFixed(2),1200);}
@@ -1813,9 +1842,100 @@ function attachPreview(){
   canvas.addEventListener('touchmove',e=>{e.preventDefault();if(e.touches.length===1&&_cpDrag.active){const t=e.touches[0],rect=canvas.getBoundingClientRect();const sx=canvas.width/rect.width,sy=canvas.height/rect.height,i=_cpDrag.idx;initT(i);collageCovers[i].transform.ox+=(t.clientX-_cpDrag.lx)*sx;collageCovers[i].transform.oy+=(t.clientY-_cpDrag.ly)*sy;_cpDrag.lx=t.clientX;_cpDrag.ly=t.clientY;redrawPreview();}else if(e.touches.length===2&&_cpTouch.idx>=0){const dist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);zoomSlot(_cpTouch.idx,(dist-_cpTouch.dist)/200);_cpTouch.dist=dist;}},{passive:false});
   canvas.addEventListener('touchend',e=>{if(e.touches.length===0){const t=e.changedTouches[0];_cpFinishDrag(t.clientX,t.clientY);_cpTouch={dist:0,idx:-1};}},{passive:false});
 }
-function _drawCellImg(ctx,c,imgEl,t){const base=Math.max(c.w/imgEl.naturalWidth,c.h/imgEl.naturalHeight);const s=base*t.scale;ctx.drawImage(imgEl,c.x+(c.w-imgEl.naturalWidth*s)/2+t.ox,c.y+(c.h-imgEl.naturalHeight*s)/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);}
-function _drawCircleImg(ctx,cx,cy,r,imgEl,t){const d=r*2;const base=Math.max(d/imgEl.naturalWidth,d/imgEl.naturalHeight);const s=base*t.scale;ctx.save();ctx.fillStyle=_frameColor;ctx.beginPath();ctx.arc(cx,cy,r+Math.max(8,Math.round(r*0.05)),0,Math.PI*2);ctx.fill();ctx.restore();ctx.save();ctx.shadowColor='rgba(0,0,0,0.45)';ctx.shadowBlur=24;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.clip();ctx.shadowColor='transparent';ctx.drawImage(imgEl,cx-imgEl.naturalWidth*s/2+t.ox,cy-imgEl.naturalHeight*s/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);ctx.restore();}
-function _drawPlateImg(ctx,cx,cy,side,imgEl,t,rad){const base=Math.max(side/imgEl.naturalWidth,side/imgEl.naturalHeight);const s=base*t.scale;const border=Math.max(10,Math.round(side*0.04));ctx.save();ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=26;ctx.fillStyle=_frameColor;rr(ctx,cx-side/2-border,cy-side/2-border,side+border*2,side+border*2,rad+2);ctx.fill();ctx.restore();ctx.save();rr(ctx,cx-side/2,cy-side/2,side,side,rad);ctx.clip();ctx.drawImage(imgEl,cx-imgEl.naturalWidth*s/2+t.ox,cy-imgEl.naturalHeight*s/2+t.oy,imgEl.naturalWidth*s,imgEl.naturalHeight*s);ctx.restore();}
+// ── Кадр «Целиком» и неон — перенесено из avito-helper (cvDrawBlurFill, cvDrawEffects) ──
+// Поля вокруг вписанной обложки — её же размытая копия. Размытие уменьшением до пары десятков
+// пикселей и обратным растяжением: одинаково в любом браузере, в отличие от ctx.filter (Safari).
+// Рамку области задаёт вызывающий своим clip — здесь режем только по прямоугольнику.
+function _ccBlurFill(ctx,img,x,y,w,h){
+  const iw=img.naturalWidth||img.width||1,ih=img.naturalHeight||img.height||1;
+  if(w<=0||h<=0)return;
+  const k=24/Math.max(w,h),sw=Math.max(1,Math.round(w*k)),sh=Math.max(1,Math.round(h*k));
+  const small=document.createElement('canvas');small.width=sw;small.height=sh;
+  const sc=small.getContext('2d');sc.imageSmoothingEnabled=true;sc.imageSmoothingQuality='high';
+  const s=Math.max(sw/iw,sh/ih);sc.drawImage(img,(sw-iw*s)/2,(sh-ih*s)/2,iw*s,ih*s);
+  ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.drawImage(small,x,y,w,h);
+  ctx.fillStyle='rgba(0,0,0,0.28)';ctx.fillRect(x,y,w,h);
+  ctx.restore();
+}
+// Картинка в области x,y,w,h: cover — заполнить с обрезкой (прежнее поведение, та же формула),
+// contain — вся картинка по центру, поля размытой копией. scale/ox/oy — кадрирование пользователя.
+function _ccDrawImgBox(ctx,img,x,y,w,h,scale,ox,oy,contain){
+  const iw=img.naturalWidth||img.width||1,ih=img.naturalHeight||img.height||1;
+  if(contain)_ccBlurFill(ctx,img,x,y,w,h);
+  const s=(contain?Math.min(w/iw,h/ih):Math.max(w/iw,h/ih))*(scale||1);
+  ctx.drawImage(img,x+(w-iw*s)/2+(ox||0),y+(h-ih*s)/2+(oy||0),iw*s,ih*s);
+}
+// '#rrggbb' → 'rgba(r,g,b,' — в том же виде, в каком шаблоны сторис собирают цвета с прозрачностью
+function _ccHexRgba(hex){
+  const m=/^#?([0-9a-f]{6})$/i.exec(String(hex||'').trim());
+  const n=m?parseInt(m[1],16):0x00dcc3;
+  return `rgba(${n>>16&255},${n>>8&255},${n&255},`;
+}
+const CC_NEON_DEFAULT='#00dcc3'; // бирюза шаблона «Неон»: с цветом по умолчанию шаблон выглядит как раньше
+function _ccReadColor(key){const v=localStorage.getItem(key);return /^#[0-9a-f]{6}$/i.test(v||'')?v:CC_NEON_DEFAULT;}
+// Коллаж: свои настройки кадра и неона (у сторис — свои, см. _stNeonOn)
+let _collFit=localStorage.getItem('cc_coll_fit')==='contain'?'contain':'cover';
+let _collNeon=localStorage.getItem('cc_coll_neon')==='1';
+let _collNeonColor=_ccReadColor('cc_coll_neon_color');
+function _drawCellImg(ctx,c,imgEl,t){_ccDrawImgBox(ctx,imgEl,c.x,c.y,c.w,c.h,t.scale,t.ox,t.oy,_collFit==='contain');}
+function _drawCircleImg(ctx,cx,cy,r,imgEl,t){ctx.save();ctx.fillStyle=_frameColor;ctx.beginPath();ctx.arc(cx,cy,r+_collRing(r),0,Math.PI*2);ctx.fill();ctx.restore();ctx.save();ctx.shadowColor='rgba(0,0,0,0.45)';ctx.shadowBlur=24;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.clip();ctx.shadowColor='transparent';_ccDrawImgBox(ctx,imgEl,cx-r,cy-r,r*2,r*2,t.scale,t.ox,t.oy,_collFit==='contain');ctx.restore();}
+function _drawPlateImg(ctx,cx,cy,side,imgEl,t,rad){const border=_collPlateBorder(side);ctx.save();ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=26;ctx.fillStyle=_frameColor;rr(ctx,cx-side/2-border,cy-side/2-border,side+border*2,side+border*2,rad+2);ctx.fill();ctx.restore();ctx.save();rr(ctx,cx-side/2,cy-side/2,side,side,rad);ctx.clip();_ccDrawImgBox(ctx,imgEl,cx-side/2,cy-side/2,side,side,t.scale,t.ox,t.oy,_collFit==='contain');ctx.restore();}
+// Толщина белого кольца вокруг центрального круга и рамки вокруг центрального квадрата — нужна и неону
+function _collRing(r){return Math.max(8,Math.round(r*0.05));}
+function _collPlateBorder(side){return Math.max(10,Math.round(side*0.04));}
+// Неоновая обводка ячеек коллажа. Толщина и свечение растут с отступом, как в avito-helper; M — масштаб
+// холста (превью 1, файл 2), чтобы в скачанном PNG неон был той же доли, что на экране.
+// В «Круг+4»/«Квадрат+4»/«Круг+4 диаг.» фоновые ячейки уходят под центральную фигуру: их контуры режем
+// по фигуре с её рамкой, иначе поверх круга лёг бы светящийся крест. Саму фигуру обводим по внешней кромке рамки.
+function _drawCollageNeon(ctx,W,H,polys){
+  if(!_collNeon||!_previewCells.length)return;
+  // Масштаб — по полю первой ячейки (x = _collagePad*M во всех макетах). От ширины холста считать нельзя:
+  // широкий 1200×630 рисует свой ряд 'row', которого getCells не знает, — неон выходил в 1.5–2 раза толще.
+  const M=_previewCells[0]&&_previewCells[0].x>0?_previewCells[0].x/_collagePad:1;
+  const lw=Math.max(2.5,_collageGap*0.32)*M,blur=Math.max(12,_collageGap*1.7)*M;
+  const centre=polys?_previewCells.find(c=>c.circle):_previewCells.find(c=>c.circle||c.plate);
+  const n=Math.min(collageCovers.length,_previewCells.length);
+  ctx.save();
+  ctx.strokeStyle=_collNeonColor;ctx.shadowColor=_collNeonColor;ctx.shadowBlur=blur;ctx.lineWidth=lw;
+  const strokeTwice=()=>{ctx.stroke();ctx.stroke();};
+  const outline=()=>{
+    if(polys){polys.forEach(poly=>{ctx.beginPath();poly.forEach(([x,y],k)=>k===0?ctx.moveTo(x,y):ctx.lineTo(x,y));ctx.closePath();strokeTwice();});return;}
+    for(let i=0;i<n;i++){const c=_previewCells[i];if(c===centre)continue;rr(ctx,c.x,c.y,c.w,c.h,8);strokeTwice();}
+  };
+  if(centre){
+    const cr=centre.circle?centre.r+_collRing(centre.r):0,half=centre.plate?centre.side/2+_collPlateBorder(centre.side):0;
+    ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);
+    if(centre.circle){ctx.moveTo(centre.cx+cr,centre.cy);ctx.arc(centre.cx,centre.cy,cr,0,Math.PI*2);}
+    else ctx.rect(centre.cx-half,centre.cy-half,half*2,half*2);
+    ctx.clip('evenodd');outline();ctx.restore();
+    if(centre.circle){ctx.beginPath();ctx.arc(centre.cx,centre.cy,cr,0,Math.PI*2);strokeTwice();}
+    else{rr(ctx,centre.cx-half,centre.cy-half,half*2,half*2,10);strokeTwice();}
+  }else outline();
+  ctx.restore();
+}
+function _ccSetBtn(b,on,offBg){if(!b)return;b.style.border='1px solid '+(on?'var(--blue)':'var(--border)');b.style.background=on?'rgba(0,112,209,.2)':(offBg||'var(--card2)');b.style.color=on?'var(--blue)':'var(--muted)';}
+function _collSyncFrameCtl(){
+  _ccSetBtn(document.getElementById('cl-fit-cover'),_collFit==='cover');
+  _ccSetBtn(document.getElementById('cl-fit-contain'),_collFit==='contain');
+  const nb=document.getElementById('cl-neon');if(nb){_ccSetBtn(nb,_collNeon);nb.textContent=_collNeon?'Вкл':'Выкл';}
+  const nc=document.getElementById('cl-neon-color');if(nc){nc.value=_collNeonColor;nc.style.display=_collNeon?'':'none';}
+}
+function _collSetFit(f){
+  if(_collFit!==f)jEvent('used',{feature:'collageFit',from:_collFit,to:f});
+  _collFit=f;localStorage.setItem('cc_coll_fit',f);_collSyncFrameCtl();
+  collageCovers.forEach((_,i)=>drawSlot(i));redrawPreview();
+}
+function _collSetNeon(on){
+  jEvent('used',{feature:'collageNeon',on,color:_collNeonColor});
+  _collNeon=!!on;localStorage.setItem('cc_coll_neon',on?'1':'0');_collSyncFrameCtl();redrawPreview();
+}
+function _collSetNeonColor(v){
+  _collNeonColor=v;localStorage.setItem('cc_coll_neon_color',v);
+  jAgg('collneoncolor','used',{feature:'collageNeonColor'},undefined,v,1200); // пипетка шлёт input на каждый шаг
+  redrawPreview();
+}
 // skipGrain — для мультиформатного экспорта: там готовый коллаж вписывается в другой холст,
 // и зерно кладётся один раз уже на него, иначе шум лёг бы дважды в середине кадра.
 function redrawPreview(targetCanvas,skipGrain){
@@ -1833,6 +1953,7 @@ function redrawPreview(targetCanvas,skipGrain){
     ctx.restore();ctx.save();rr(ctx,cell.x,cell.y,cell.w,cell.h,8);ctx.strokeStyle=_frameColor+'20';ctx.lineWidth=1;ctx.stroke();ctx.restore();
   });
   if(lay==='circ4'||lay==='square5'){const oi=_previewCells.findIndex(c=>c.circle||c.plate);if(oi>=0&&oi<collageCovers.length){const cell=_previewCells[oi];const cv=collageCovers[oi];initT(oi);if(cell.circle&&cv.imgEl){_drawCircleImg(ctx,cell.cx,cell.cy,cell.r,cv.imgEl,cv.transform);}else if(cell.plate&&cv.imgEl){_drawPlateImg(ctx,cell.cx,cell.cy,cell.side,cv.imgEl,cv.transform,8);}}}
+  _drawCollageNeon(ctx,W,H);
   _drawCollageWatermark(ctx,W,H);
   if(!skipGrain)_drawCollageGrain(ctx,W,H);
 }
@@ -1863,7 +1984,7 @@ function _redrawCirc4d(ctx,W,H){
   _pinwheelPolys.forEach((poly,si)=>{
     const imgIdx=si+1;const cv=collageCovers[imgIdx];
     ctx.save();ctx.beginPath();poly.forEach(([x,y],k)=>k===0?ctx.moveTo(x,y):ctx.lineTo(x,y));ctx.closePath();ctx.clip();
-    if(cv?.imgEl){const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);const bx=Math.min(...xs),by=Math.min(...ys),bw=Math.max(...xs)-bx,bh=Math.max(...ys)-by;initT(imgIdx);const t=cv.transform;const base=Math.max(bw/cv.imgEl.naturalWidth,bh/cv.imgEl.naturalHeight);const s=base*t.scale;ctx.drawImage(cv.imgEl,bx+(bw-cv.imgEl.naturalWidth*s)/2+t.ox,by+(bh-cv.imgEl.naturalHeight*s)/2+t.oy,cv.imgEl.naturalWidth*s,cv.imgEl.naturalHeight*s);}
+    if(cv?.imgEl){const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);const bx=Math.min(...xs),by=Math.min(...ys),bw=Math.max(...xs)-bx,bh=Math.max(...ys)-by;initT(imgIdx);const t=cv.transform;_ccDrawImgBox(ctx,cv.imgEl,bx,by,bw,bh,t.scale,t.ox,t.oy,_collFit==='contain');}
     else{ctx.fillStyle='#1a1a30';ctx.fillRect(0,0,W,H);}
     ctx.restore();
   });
@@ -1872,6 +1993,7 @@ function _redrawCirc4d(ctx,W,H){
   pts.forEach(([ex,ey],i)=>{const a=THETA+i*Math.PI/2;const rx=cx+r*Math.cos(a),ry=cy+r*Math.sin(a);ctx.beginPath();ctx.moveTo(rx,ry);ctx.lineTo(ex,ey);ctx.stroke();});
   ctx.restore();
   const cv0=collageCovers[0];if(cv0?.imgEl){initT(0);_drawCircleImg(ctx,cx,cy,r,cv0.imgEl,cv0.transform);}
+  _drawCollageNeon(ctx,W,H,_pinwheelPolys);
   // CC-4: в режиме «Карточки» цены не помещаются в треугольные секторы — рисуем чипы в углах экрана
   // (каждый угол = сектор своей игры), центральную игру — чипом на нижней кромке круга.
   if(_collageMode==='cards'){
@@ -2004,7 +2126,7 @@ function downloadCollage(){
       if(failed)showToast('⚠️ '+failed+' обл. не загрузилось — в файле заглушки');
       _jExported=true;
       jEvent('published',Object.assign({kind:'collage',file:'collage.png',w:off.width,h:off.height,
-        mode:_collageMode,layout:getLayout(),bgStyle:_collageBgStyle,logoShape:_logoShape,
+        mode:_collageMode,layout:getLayout(),bgStyle:_collageBgStyle,logoShape:_logoShape,fit:_collFit,neon:_collNeon?_collNeonColor:null,
         failedCovers:failed||0,decisionMin:_jMinutes()},_jCollageState()));
     }catch(e){ jError('collage_export',e.message,{w:off.width,h:off.height}); showToast('Ошибка: '+e.message); }
   });
@@ -2425,6 +2547,7 @@ function _stProcBg(ctx,kind,x,y,w,h,g){
 // Обложка — или процедурный фон вместо неё. Раньше «картинки нет» во всех шаблонах означало один и
 // тот же плоский тёмно-синий градиент, а выбор в строке игры шаблоны не читали вовсе.
 function _stCoverOrBg(ctx,x,y,w,h,g,useTransform){
+  _stNeonMark(ctx,x,y,w,h);
   const kind=(g&&g.bg)||'image';
   if(kind==='image'){
     if(g&&g.imgEl){_stImgRect(ctx,g.imgEl,x,y,w,h,useTransform?g.transform:null);return true;}
@@ -2481,6 +2604,52 @@ function _stRenderImgFilterBtns(){
   if(row){row.style.display=_stImgFilter==='none'?'none':'flex';
     const sl=document.getElementById('st-imgf-amt');if(sl)sl.value=String(Math.round(_stImgFilterAmt*100));
     const lbl=document.getElementById('st-imgf-amt-val');if(lbl)lbl.textContent=Math.round(_stImgFilterAmt*100)+'%';}
+}
+// ── Кадр «Целиком» и неон в шаблонах сторис (из avito-helper) ──
+let _stFit=localStorage.getItem('cc_st_fit')==='contain'?'contain':'cover';
+let _stNeonOn=localStorage.getItem('cc_st_neon')==='1';
+let _stNeonColor=_ccReadColor('cc_st_neon_color');
+// Контуры собираются во время отрисовки шаблона (каждая обложка отмечается в _stCoverOrBg вместе с
+// текущей матрицей — «Веер» рисует повёрнутыми) и обводятся поверх: обложку шаблоны клипуют по её
+// краю, и свечение, нарисованное сразу, срезалось бы наполовину. Где карточки перекрывают друг
+// друга («Веер», «Каскад»), шаблон сбрасывает контуры после каждой карточки — иначе неон нижней
+// карточки лёг бы поверх верхней.
+let _stNeonRects=null;
+function _stNeonMark(ctx,x,y,w,h,r){if(_stNeonRects)_stNeonRects.push({m:ctx.getTransform(),x,y,w,h,r:r||0});}
+function _stNeonFlush(ctx){
+  if(!_stNeonRects||!_stNeonRects.length)return;
+  const list=_stNeonRects.splice(0),cw=ctx.canvas.width,ch=ctx.canvas.height,sx=cw/STORY_W;
+  const lw=Math.max(2,5*sx),blur=Math.max(10,24*sx);
+  ctx.save();
+  list.forEach(o=>{
+    ctx.setTransform(o.m);
+    let{x,y,w,h}=o;
+    // Обложка во весь кадр: контур у самого края ушёл бы наполовину за холст — сдвигаем внутрь
+    if(o.m.isIdentity){const x1=Math.min(x+w,cw-lw/2),y1=Math.min(y+h,ch-lw/2);x=Math.max(x,lw/2);y=Math.max(y,lw/2);w=x1-x;h=y1-y;}
+    if(w<=0||h<=0)return;
+    ctx.strokeStyle=_stNeonColor;ctx.shadowColor=_stNeonColor;ctx.shadowBlur=blur;ctx.lineWidth=lw;
+    ctx.beginPath();ctx.roundRect(x,y,w,h,o.r);ctx.stroke();ctx.stroke();
+  });
+  ctx.restore();
+}
+function _stSyncFrameCtl(){
+  _ccSetBtn(document.getElementById('st-fit-cover'),_stFit==='cover','var(--card)');
+  _ccSetBtn(document.getElementById('st-fit-contain'),_stFit==='contain','var(--card)');
+  const nb=document.getElementById('st-neon');if(nb){_ccSetBtn(nb,_stNeonOn,'var(--card)');nb.textContent=_stNeonOn?'Вкл':'Выкл';}
+  const nc=document.getElementById('st-neon-color');if(nc&&document.activeElement!==nc)nc.value=_stNeonColor;
+}
+function _stSetFit(f){
+  if(_stFit!==f)jEvent('used',{feature:'storyFit',from:_stFit,to:f,tpl:_stTplId});
+  _stFit=f;localStorage.setItem('cc_st_fit',f);_stRedrawCurrent();
+}
+function _stSetNeon(on){
+  jEvent('used',{feature:'storyNeon',on,color:_stNeonColor,tpl:_stTplId});
+  _stNeonOn=!!on;localStorage.setItem('cc_st_neon',on?'1':'0');_stRedrawCurrent();
+}
+function _stSetNeonColor(v){
+  _stNeonColor=v;localStorage.setItem('cc_st_neon_color',v);
+  jAgg('stneoncolor','used',{feature:'storyNeonColor',tpl:_stTplId},undefined,v,1200);
+  _stRedrawCurrent();
 }
 function _getGrainCanvas(){
   if(_grainCanvas)return _grainCanvas;
@@ -2559,6 +2728,13 @@ function _stImgRect(ctx,img,x,y,w,h,t){
 }
 function _stImgRectRaw(ctx,img,x,y,w,h,t){
   if(!img)return;
+  // «Целиком»: обложка видна вся, поля — размытая копия. Только в шаблонах: переключатель живёт в их панели.
+  if(_stFit==='contain'&&_stMode==='templates'){
+    const gsx=ctx.canvas.width/STORY_W,gsy=ctx.canvas.height/STORY_H;
+    ctx.save();ctx.beginPath();ctx.rect(x,y,w,h);ctx.clip();
+    _ccDrawImgBox(ctx,img,x,y,w,h,t?t.scale:1,t?(t.ox||0)*gsx:0,t?(t.oy||0)*gsy:0,true);
+    ctx.restore();return;
+  }
   if(t&&(t.ox||t.oy||(t.scale&&t.scale!==1))){
     // CC-5: перекадровка обложки в шаблонах — ox/oy заданы в story-координатах (как в _stDrawBg/drag-хендлерах),
     // переводим в пиксели канваса через глобальный sx/sy, поэтому панорама идёт 1:1 за курсором в любом слоте.
@@ -2709,7 +2885,12 @@ function _stRenderTemplate(){
   _stSyncDescEdit();
   _stSyncBgBtns();
   _stRenderImgFilterBtns();
-  ({poster:_stTplPoster,cards:_stTplCard1,hero:_stTplHero,fan:_stTplFan,diag:_stTplDiag,cascade:_stTplCascade,horizon:_stTplHorizon,neon:_stTplNeon}[_stTplId]||_stTplCard1)();
+  _stSyncFrameCtl();
+  _stNeonRects=(_stNeonOn&&_stTplId!=='neon')?[]:null; // у «Неона» свечение встроено и берёт тот же цвет
+  try{
+    ({poster:_stTplPoster,cards:_stTplCard1,hero:_stTplHero,fan:_stTplFan,diag:_stTplDiag,cascade:_stTplCascade,horizon:_stTplHorizon,neon:_stTplNeon}[_stTplId]||_stTplCard1)();
+    _stNeonFlush(_stCtx); // неон — поверх карточек, но под логотипом и зерном
+  }finally{_stNeonRects=null;}
   if(_stLogoImg&&_stLogoPos!=='none')_stDrawTemplateLogo(_stCtx,_stCanvas.width,_stCanvas.height,_stCanvas.width/STORY_W);
   // Зерно — фильтр всего кадра поверх всего, включая обложку и логотип. Раньше оно жило внутри
   // «фона шаблона», а фон рисуют только «Веер» и «Каскад»: в остальных шести шаблонах обложка
@@ -2844,6 +3025,7 @@ function _stTplFan(){
     _stCoverOrBg(ctx,-hw,-hh,cW,cH,g,false);
     ctx.restore();
     ctx.fillStyle='rgba(0,112,209,0.85)';ctx.fillRect(-hw,hh-Math.round(4),cW,Math.round(4));
+    _stNeonFlush(ctx); // карточки веера перекрываются — контур каждой сразу, до следующей
     ctx.restore();
   }
   ctx.restore();
@@ -2946,6 +3128,7 @@ function _stTplCascade(){
     if(g.discount){const bfs=Math.max(Math.round(20*sx),8),bw=Math.round(70*sx),bh=Math.round(bfs*1.6),bx=x+cardW-bw-pad-qrRes,by=Math.round(cPriceY+(pfs-bh)/2);ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
     if(qrS){const qx=x+cardW-pad-qrPadW-qrS,qy=plY+Math.round((plH-qrS)/2);_stDrawQr(ctx,qrImg,qx,qy,qrS);
       if(i===n-1){lastQrLeft=qx-qrPadW;lastQrTop=qy-qrPadW;lastQrBot=qy+qrS+qrPadW;}} // описание может лечь поверх нижней карточки — см. ниже
+    _stNeonFlush(ctx); // карточки каскада перекрываются — контур каждой сразу, до следующей
     ctx.restore();
   }
   if(_stDescOn){
@@ -3537,7 +3720,7 @@ function _stTplHorizon(){
   // Выбранный в строке игры фон важнее обложки; если он не выбран — обложка, а без неё общий фон
   // шаблона (там, в отличие от остальных, настоящие Blur/Glow — кадр ничем не перекрыт)
   if(g&&g.bg&&g.bg!=='image')_stProcBg(ctx,g.bg,0,0,cw,ch,g);
-  else if(g&&g.imgEl)_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);
+  else if(g&&g.imgEl){_stNeonMark(ctx,0,0,cw,ch);_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);}
   else _stRenderTemplateBg(ctx,cw,ch,g);
   const vig=ctx.createRadialGradient(cw/2,ch*.42,ch*.06,cw/2,ch*.42,ch*.7);vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(.4,'rgba(0,0,0,0.45)');vig.addColorStop(1,'rgba(0,0,0,0.95)');ctx.fillStyle=vig;ctx.fillRect(0,0,cw,ch);
   const bot=ctx.createLinearGradient(0,ch*.58,0,ch);bot.addColorStop(0,'rgba(4,4,16,0)');bot.addColorStop(1,'rgba(4,4,16,0.97)');ctx.fillStyle=bot;ctx.fillRect(0,ch*.58,cw,ch*.42);
@@ -3580,17 +3763,17 @@ function _stTplNeon(){
   ctx.clearRect(0,0,cw,ch);const g=_stG[0];
   ctx.fillStyle='#020210';ctx.fillRect(0,0,cw,ch);
   ctx.fillStyle='rgba(255,255,255,0.015)';for(let y=0;y<ch;y+=3)ctx.fillRect(0,y,cw,1);
-  const gc='rgba(0,220,195,';
+  const gc=_ccHexRgba(_stNeonColor),gs=_stNeonColor; // цвет свечения — выбранный цвет неона (по умолчанию прежняя бирюза)
   const cen1=ctx.createRadialGradient(cw*.15,ch*.12,0,cw*.15,ch*.12,cw*.6);cen1.addColorStop(0,gc+'0.12)');cen1.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=cen1;ctx.fillRect(0,0,cw,ch);
   const cen2=ctx.createRadialGradient(cw*.85,ch*.88,0,cw*.85,ch*.88,cw*.5);cen2.addColorStop(0,'rgba(180,0,240,0.10)');cen2.addColorStop(1,'rgba(0,0,0,0)');ctx.fillStyle=cen2;ctx.fillRect(0,0,cw,ch);
   const _nMulti=n>1; // CC-7: при нескольких играх главная обложка меньше и выше — освобождает место под крупные мини
   // В TG обложка поменьше: цене и описанию нужно уместиться над безопасной зоной снизу
   const sb=_stSafeB(ch);
   const covW=Math.round(cw*(_nMulti?(sb?.50:.56):(sb?.62:.72))),covH=Math.round(covW*4/3),covX=Math.round((cw-covW)/2),covY=Math.round(ch*(_nMulti?.13:.18));
-  for(let i=3;i>=1;i--){ctx.save();ctx.strokeStyle='rgba(0,220,195,'+(0.055*i)+')';ctx.lineWidth=2+i*2.5;ctx.shadowColor='#00dcc0';ctx.shadowBlur=9*i;ctx.beginPath();ctx.roundRect(covX-i*5,covY-i*5,covW+i*10,covH+i*10,Math.round(6*sx));ctx.stroke();ctx.restore();}
+  for(let i=3;i>=1;i--){ctx.save();ctx.strokeStyle=gc+(0.055*i)+')';ctx.lineWidth=2+i*2.5;ctx.shadowColor=gs;ctx.shadowBlur=9*i;ctx.beginPath();ctx.roundRect(covX-i*5,covY-i*5,covW+i*10,covH+i*10,Math.round(6*sx));ctx.stroke();ctx.restore();}
   ctx.save();ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.clip();
   _stCoverOrBg(ctx,covX,covY,covW,covH,g,true);ctx.restore();
-  ctx.save();ctx.strokeStyle='rgba(0,220,195,0.62)';ctx.lineWidth=1.5;ctx.shadowColor='#00dcc0';ctx.shadowBlur=7;ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.stroke();ctx.restore();
+  ctx.save();ctx.strokeStyle=gc+'0.62)';ctx.lineWidth=1.5;ctx.shadowColor=gs;ctx.shadowBlur=7;ctx.beginPath();ctx.roundRect(covX,covY,covW,covH,Math.round(4*sx));ctx.stroke();ctx.restore();
   [[ch*0.088,'rgba(0,200,255,0.13)'],[ch*0.112,'rgba(200,0,240,0.09)']].forEach(function(pair){ctx.save();ctx.strokeStyle=pair[1];ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,pair[0]);ctx.lineTo(cw,pair[0]);ctx.stroke();ctx.restore();});
   if(!g)return;
   const pfs=Math.max(Math.round(76*sx),24);
@@ -3609,7 +3792,7 @@ function _stTplNeon(){
       ctx.save();ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.clip();
       _stCoverOrBg(ctx,mx,my,mw,mh,gi,false);
       ctx.restore();
-      ctx.save();ctx.strokeStyle='rgba(0,220,195,0.5)';ctx.lineWidth=1.2;ctx.shadowColor='#00dcc0';ctx.shadowBlur=5;ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.stroke();ctx.restore();
+      ctx.save();ctx.strokeStyle=gc+'0.5)';ctx.lineWidth=1.2;ctx.shadowColor=gs;ctx.shadowBlur=5;ctx.beginPath();ctx.roundRect(mx,my,mw,mh,Math.round(4*sx));ctx.stroke();ctx.restore();
       if(gi&&gi.priceRUB){const pf=Math.max(Math.round(20*sx),9);ctx.save();ctx.font='700 '+pf+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(gi.priceRUB.toLocaleString('ru')+' ₽',mx+mw/2,my+mh+Math.round(4*sx));ctx.restore();}
       mx+=mw+gap;
     }
@@ -3667,7 +3850,7 @@ function _jStoryState(){
     const shares=shown.map(g=>_stShortDescsAI[g.title]!==undefined?jShare(_stShortDescsAI[g.title],_stShortDescs[g.title]||''):null).filter(x=>x!==null);
     return {
       tpl:_stTplId,mode:_stMode,platform:_stPlatform,cardStyle:_stCardStyle,bgStyle:_stBgStyle,
-      logoPos:_stLogoPos,logoShape:_logoShape,descOn:_stDescOn,qrOn:_stQrOn,
+      logoPos:_stLogoPos,logoShape:_logoShape,descOn:_stDescOn,qrOn:_stQrOn,fit:_stFit,neon:_stNeonOn?_stNeonColor:null,
       qrGames:_stQrOn?_stG.slice(0,n).filter(g=>g.id!=null).length:0,
       gameCount:n,titles:shown.map(g=>g.title),
       slotBgs:shown.map(g=>g.bg||'image'),
