@@ -557,6 +557,9 @@
           <button class="bf sec" onclick="regenPost()">🔄 Заново</button>
           <button class="bf sec" id="send-tg-btn" onclick="sendPostToTG()" title="Отправить в канал @play_best_games">📤 Отправить в канал</button>
         </div>
+        <div class="bf2" style="margin-top:6px">
+          <button class="bf sec" id="queue-tg-btn" onclick="queuePostToBot()" title="Черновик придёт в editorial-бота: там «Опубликовать» или «Запланировать» на нужное время">🕐 В очередь бота</button>
+        </div>
       </div>
     </div>
     <div class="modal-foot">
@@ -1266,12 +1269,14 @@ function _outSerialize(mode){
   if (!root) return '';
   let out = '';
   function walk(node){
-    if (node.nodeType===3){ out += mode==='md' ? _escMd(node.nodeValue) : node.nodeValue; return; }
+    if (node.nodeType===3){ out += mode==='md' ? _escMd(node.nodeValue) : mode==='html' ? _escHtml(node.nodeValue) : node.nodeValue; return; }
     if (node.nodeType!==1) return;
     if (node.tagName==='A'){
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
-      out += mode==='md' ? `[${_escMd(label)}](${href})` : mode==='mdraw' ? `[${label}](${href})` : `${label} (${href})`;
+      out += mode==='md' ? `[${_escMd(label)}](${href})` : mode==='mdraw' ? `[${label}](${href})`
+        : mode==='html' ? `<a href="${_escHtml(href).replace(/"/g,'&quot;')}">${_escHtml(label)}</a>`
+        : mode==='visible' ? label : `${label} (${href})`; // visible — то, что покажет Telegram: адрес ссылки в лимит не входит
       return;
     }
     if (node.tagName==='BR'){ out += '\n'; return; }
@@ -1558,6 +1563,50 @@ async function sendPostToTG(){
     showToast('Ошибка отправки: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '📤 Отправить в канал'; }
+  }
+}
+// М1 (PLAN-MARKET): пост уходит черновиком в editorial-бота (backend/server.js: POST /api/cc-queue →
+// localhost-вход бота). В канал он попадёт только после «Опубликовать» или «Запланировать» в боте,
+// поэтому двойного клика, как у отправки, здесь нет. Бот публикует с parse_mode HTML — шлём HTML.
+// ВК: пост editorial-бота подхватывает вебхук кросспоста.
+async function queuePostToBot(){
+  const html = _outSerialize('html');
+  if (!html) { showToast('Сначала собери пост'); return; }
+  const len = _outSerialize('visible').length; // Telegram считает видимый текст, без адресов ссылок
+  const lim = _tgLimit();
+  if (len > lim) {
+    jEvent('rejected', { mode: 'post', reason: 'over_limit', target: 'queue', len, limit: lim, hasImg: !!_ccPostImg });
+    showToast(`❌ ${len.toLocaleString('ru')} символов — лимит ${lim.toLocaleString('ru')}${_ccPostImg ? ' (подпись к фото)' : ''}. Сократи.`);
+    return;
+  }
+  let token = localStorage.getItem('cc_admin_token') || '';
+  if (!token) {
+    token = (prompt('Админ-токен для очереди бота:') || '').trim();
+    if (!token) return;
+    localStorage.setItem('cc_admin_token', token);
+  }
+  const btn = document.getElementById('queue-tg-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Передаю боту...'; }
+  try {
+    const resp = await fetch(API + '/api/cc-queue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify(_ccPostImg ? { text: html, photo: _ccPostImg } : { text: html })
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    showToast('🕐 Черновик в боте — там «Опубликовать» или «Запланировать»');
+    _jExported = true;
+    _jPostEdited();
+    const plainFinal = _outSerialize('plain');
+    jEvent('published', { kind: 'tg_queue', mode: 'post', final: plainFinal, len, limit: lim,
+      hasImg: !!_ccPostImg, imgLabel: _ccPostImgLabel || null, draftId: data.draftId || null,
+      editSharePct: _ccPostBot ? jShare(_ccPostBot, plainFinal) : null,
+      aiPasses: _jAiPasses, decisionMin: _jMinutes() });
+  } catch (e) {
+    jError('tg_queue', e.message, { len, hasImg: !!_ccPostImg });
+    showToast('Ошибка очереди: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🕐 В очередь бота'; }
   }
 }
 
