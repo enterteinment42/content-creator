@@ -1,0 +1,11 @@
+{
+  "name": "content-creator-tools",
+  "private": true,
+  "description": "Стенд content-creator (stand.js) и разбор журнала (journal-report.js)",
+  "scripts": {
+    "stand": "node stand.js"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}
