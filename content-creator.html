@@ -2683,7 +2683,10 @@ function _stNeonFlush(ctx){
     let{x,y,w,h}=o;
     // Обложка во весь кадр: контур у самого края ушёл бы наполовину за холст — сдвигаем внутрь,
     // а снизу поднимаем над безопасной зоной TG: там нижняя кромка уходила под подпись и кнопки
-    if(o.m.isIdentity){const x1=Math.min(x+w,cw-lw/2),y1=Math.min(y+h,ch-_stSafeB(ch)-lw/2);x=Math.max(x,lw/2);y=Math.max(y,lw/2);w=x1-x;h=y1-y;}
+    // Подъём над зоной TG — только для обложки на весь кадр: нижние карточки «Карточек» и «Героя»
+    // нарочно доходят до края, им рамку резать нельзя (она прошла бы поперёк плашки)
+    const full=o.m.isIdentity&&x<=0&&y<=0&&x+w>=cw&&y+h>=ch;
+    if(o.m.isIdentity){const x1=Math.min(x+w,cw-lw/2),y1=Math.min(y+h,ch-(full?_stSafeB(ch):0)-lw/2);x=Math.max(x,lw/2);y=Math.max(y,lw/2);w=x1-x;h=y1-y;}
     if(w<=0||h<=0)return;
     ctx.strokeStyle=_stNeonColor;ctx.shadowColor=_stNeonColor;ctx.shadowBlur=blur;ctx.lineWidth=lw;
     ctx.beginPath();ctx.roundRect(x,y,w,h,o.r);ctx.stroke();ctx.stroke();
@@ -3783,8 +3786,8 @@ function _stTplHorizon(){
   else if(g&&g.imgEl){_stNeonMark(ctx,0,0,cw,ch);_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);}
   else _stRenderTemplateBg(ctx,cw,ch,g);
   const vig=ctx.createRadialGradient(cw/2,ch*.42,ch*.06,cw/2,ch*.42,ch*.7);vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(.4,'rgba(0,0,0,0.45)');vig.addColorStop(1,'rgba(0,0,0,0.95)');ctx.fillStyle=vig;ctx.fillRect(0,0,cw,ch);
-  _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх виньетки, но под текстом и QR
   const bot=ctx.createLinearGradient(0,ch*.58,0,ch);bot.addColorStop(0,'rgba(4,4,16,0)');bot.addColorStop(1,'rgba(4,4,16,0.97)');ctx.fillStyle=bot;ctx.fillRect(0,ch*.58,cw,ch*.42);
+  _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх виньетки и нижнего затемнения, но под текстом и QR
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(42*sx,14),pfs=Math.max(Math.round(90*sx),28);
   // В TG композиция приподнята: иначе описание, прижатое к границе безопасной зоны, въезжало в мини-обложки

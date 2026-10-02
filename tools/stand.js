@@ -115,12 +115,23 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       const ch = off.h, floor = 1 - _stSafeB(ch) / ch;
       // QR — правый нижний угол над безопасной зоной; берём его середину, без кромки
       return { qr: __diff(__crop(off, .87, floor - .12, .95, floor - .04), __crop(on, .87, floor - .12, .95, floor - .04)),
-               // левая кромка в нижней трети — там «Постер» затемняет, а «Диагональ» кладёт клин
-               edge: __diff(__crop(off, 0, .7, .03, floor - .02), __crop(on, 0, .7, .03, floor - .02)),
+               // левая кромка у самого низа — там «Постер» и «Горизонт» затемняют, а «Диагональ» кладёт клин
+               edge: __diff(__crop(off, 0, floor - .12, .03, floor - .02), __crop(on, 0, floor - .12, .03, floor - .02)),
                safe: __diff(__crop(off, .1, floor + .03, .9, 1), __crop(on, .1, floor + .03, .9, 1)) };
     }, t);
     // qr — справочно: свечение у края до середины кода не дотягивалось и до правки, падать здесь нечему
     ok(`неон во весь кадр (${t}): кромка над зоной TG и видна под затемнением`, r.safe < 1 && r.edge > 20, JSON.stringify(r));
+  }
+
+  // Нижние карточки «Карточек» и «Героя» доходят до края кадра — их рамку над зоной TG не поднимаем
+  for (const t of ['cards', 'hero']) {
+    const r = await p.evaluate(t => {
+      stSetGameCount(3); _stSetPlatform('tg'); _stSetFit('cover'); _stSetTpl(t); _stSetNeon(false); const off = __snap('st-canvas');
+      _stSetNeon(true); const on = __snap('st-canvas'); _stSetNeon(false);
+      // левая кромка внутри зоны TG: рамка нижней карточки обязана туда доходить
+      return { inSafe: __diff(__crop(off, 0, .9, .03, .99), __crop(on, 0, .9, .03, .99)) };
+    }, t);
+    ok(`неон нижней карточки (${t}, n=3): рамка доходит до низа`, r.inSafe > 20, JSON.stringify(r));
   }
 
   // Экспорт сторис
