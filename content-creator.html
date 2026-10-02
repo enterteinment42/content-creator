@@ -969,12 +969,12 @@ function _brandRenderSel() {
 function brandSaveCurrent() {
   const name = (prompt('Имя пресета бренда (сохранит текущие шапку/подвал, лого, цвета, шаблон):', localStorage.getItem('cc_brand_current') || '') || '').trim();
   if (!name) return;
-  const snap = {};
+  const snap = { _v: 2 }; // _v:2 — пресет знает о неоне и кадре, отсутствие ключа значит «по умолчанию»
   BRAND_KEYS.forEach(k => { const v = localStorage.getItem(k); if (v !== null) snap[k] = v; });
   const all = _brandList(); all[name] = snap;
   localStorage.setItem('cc_brand_presets', JSON.stringify(all));
   localStorage.setItem('cc_brand_current', name);
-  jEvent('used', { feature: 'brandSave', name, keys: Object.keys(snap).length });
+  jEvent('used', { feature: 'brandSave', name, keys: Object.keys(snap).length - 1 });
   _brandRenderSel();
   showToast(`💾 Бренд «${name}» сохранён`);
 }
@@ -983,8 +983,9 @@ function brandApply(name) {
   const snap = _brandList()[name]; if (!snap) { jError('brand_apply', 'пресет не найден', { name }); showToast('Пресет не найден'); return; }
   jEvent('used', { feature: 'brandApply', name });
   // Ключи, добавленные позже (неон и кадр, 28.09.2026), в старых пресетах отсутствуют — их не стираем,
-  // иначе применение старого пресета молча гасило бы неон и «Целиком».
-  BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else if (!BRAND_KEYS_LATE.has(k)) localStorage.removeItem(k); });
+  // иначе применение старого пресета молча гасило бы неон и «Целиком». Пресеты с _v:2 сохранены уже
+  // после них — там отсутствие ключа значит «по умолчанию», и его надо стереть, а не унаследовать.
+  BRAND_KEYS.forEach(k => { if (k in snap) localStorage.setItem(k, snap[k]); else if (snap._v >= 2 || !BRAND_KEYS_LATE.has(k)) localStorage.removeItem(k); });
   localStorage.setItem('cc_brand_current', name);
   _brandApplyLive();
   showToast(`✅ Бренд «${name}» применён`);
@@ -1928,9 +1929,13 @@ function _ccReadColor(key){const v=localStorage.getItem(key);return /^#[0-9a-f]{
 let _collFit=localStorage.getItem('cc_coll_fit')==='contain'?'contain':'cover';
 let _collNeon=localStorage.getItem('cc_coll_neon')==='1';
 let _collNeonColor=_ccReadColor('cc_coll_neon_color');
-function _drawCellImg(ctx,c,imgEl,t){_ccDrawImgBox(ctx,imgEl,c.x,c.y,c.w,c.h,t.scale,t.ox,t.oy,_collFit==='contain');}
-function _drawCircleImg(ctx,cx,cy,r,imgEl,t){ctx.save();ctx.fillStyle=_frameColor;ctx.beginPath();ctx.arc(cx,cy,r+_collRing(r),0,Math.PI*2);ctx.fill();ctx.restore();ctx.save();ctx.shadowColor='rgba(0,0,0,0.45)';ctx.shadowBlur=24;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.clip();ctx.shadowColor='transparent';_ccDrawImgBox(ctx,imgEl,cx-r,cy-r,r*2,r*2,t.scale,t.ox,t.oy,_collFit==='contain');ctx.restore();}
-function _drawPlateImg(ctx,cx,cy,side,imgEl,t,rad){const border=_collPlateBorder(side);ctx.save();ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=26;ctx.fillStyle=_frameColor;rr(ctx,cx-side/2-border,cy-side/2-border,side+border*2,side+border*2,rad+2);ctx.fill();ctx.restore();ctx.save();rr(ctx,cx-side/2,cy-side/2,side,side,rad);ctx.clip();_ccDrawImgBox(ctx,imgEl,cx-side/2,cy-side/2,side,side,t.scale,t.ox,t.oy,_collFit==='contain');ctx.restore();}
+// Сдвиг кадра (t.ox/oy) хранится в пикселях превью (getCells, масштаб 1). Экспорт рисует ячейки в
+// масштабе 2 — на время его отрисовки _collDrawScale=2, иначе в PNG обложка уезжала вдвое меньше, чем на экране.
+let _collDrawScale=1;
+function _collRedrawAt(canvas,scale,skipGrain){_collDrawScale=scale;try{redrawPreview(canvas,skipGrain);}finally{_collDrawScale=1;}}
+function _drawCellImg(ctx,c,imgEl,t){_ccDrawImgBox(ctx,imgEl,c.x,c.y,c.w,c.h,t.scale,t.ox*_collDrawScale,t.oy*_collDrawScale,_collFit==='contain');}
+function _drawCircleImg(ctx,cx,cy,r,imgEl,t){ctx.save();ctx.fillStyle=_frameColor;ctx.beginPath();ctx.arc(cx,cy,r+_collRing(r),0,Math.PI*2);ctx.fill();ctx.restore();ctx.save();ctx.shadowColor='rgba(0,0,0,0.45)';ctx.shadowBlur=24;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.clip();ctx.shadowColor='transparent';_ccDrawImgBox(ctx,imgEl,cx-r,cy-r,r*2,r*2,t.scale,t.ox*_collDrawScale,t.oy*_collDrawScale,_collFit==='contain');ctx.restore();}
+function _drawPlateImg(ctx,cx,cy,side,imgEl,t,rad){const border=_collPlateBorder(side);ctx.save();ctx.shadowColor='rgba(0,0,0,0.4)';ctx.shadowBlur=26;ctx.fillStyle=_frameColor;rr(ctx,cx-side/2-border,cy-side/2-border,side+border*2,side+border*2,rad+2);ctx.fill();ctx.restore();ctx.save();rr(ctx,cx-side/2,cy-side/2,side,side,rad);ctx.clip();_ccDrawImgBox(ctx,imgEl,cx-side/2,cy-side/2,side,side,t.scale,t.ox*_collDrawScale,t.oy*_collDrawScale,_collFit==='contain');ctx.restore();}
 // Толщина белого кольца вокруг центрального круга и рамки вокруг центрального квадрата — нужна и неону
 function _collRing(r){return Math.max(8,Math.round(r*0.05));}
 function _collPlateBorder(side){return Math.max(10,Math.round(side*0.04));}
@@ -2164,7 +2169,7 @@ function _renderCollageFull(cb){
   document.fonts.ready.then(()=>{
   const lay=getLayout();const{cells,W,H}=getCells(lay,collageCovers.length,2);const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
   const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
-  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(off);_collageLayout=prevLayout;_previewCells=prevCells;collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();cb(off,_failed);});
+  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;_collRedrawAt(off,2);_collageLayout=prevLayout;_previewCells=prevCells;collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();cb(off,_failed);});
   });
 }
 function downloadCollage(){
@@ -2229,7 +2234,7 @@ function downloadCollageFormat(fmt){
   const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
   Promise.all(tasks).then(()=>{
     const src=document.createElement('canvas');src.width=W;src.height=H;
-    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;redrawPreview(src,true);_collageLayout=prevLayout;_previewCells=prevCells;
+    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;_collRedrawAt(src,2,true);_collageLayout=prevLayout;_previewCells=prevCells;
     collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();
     const out=document.createElement('canvas');out.width=f.w;out.height=f.h;const octx=out.getContext('2d');
     _drawCollageBg(octx,f.w,f.h);
@@ -2597,6 +2602,13 @@ function _stProcBg(ctx,kind,x,y,w,h,g){
 // тот же плоский тёмно-синий градиент, а выбор в строке игры шаблоны не читали вовсе.
 function _stCoverOrBg(ctx,x,y,w,h,g,useTransform){
   _stNeonMark(ctx,x,y,w,h);
+  const r=_stCoverOrBgRaw(ctx,x,y,w,h,g,useTransform);
+  // Обложка во весь кадр не клипуется меньше холста — обводим сразу, чтобы рамка легла ПОД текст,
+  // QR и мини-обложки, а не поверх них (общий проход в конце шаблона рисует поверх всего)
+  if(_stNeonRects&&ctx.getTransform().isIdentity&&x<=0&&y<=0&&w>=ctx.canvas.width&&h>=ctx.canvas.height)_stNeonFlush(ctx);
+  return r;
+}
+function _stCoverOrBgRaw(ctx,x,y,w,h,g,useTransform){
   const kind=(g&&g.bg)||'image';
   if(kind==='image'){
     if(g&&g.imgEl){_stImgRect(ctx,g.imgEl,x,y,w,h,useTransform?g.transform:null);return true;}
@@ -2673,8 +2685,9 @@ function _stNeonFlush(ctx){
   list.forEach(o=>{
     ctx.setTransform(o.m);
     let{x,y,w,h}=o;
-    // Обложка во весь кадр: контур у самого края ушёл бы наполовину за холст — сдвигаем внутрь
-    if(o.m.isIdentity){const x1=Math.min(x+w,cw-lw/2),y1=Math.min(y+h,ch-lw/2);x=Math.max(x,lw/2);y=Math.max(y,lw/2);w=x1-x;h=y1-y;}
+    // Обложка во весь кадр: контур у самого края ушёл бы наполовину за холст — сдвигаем внутрь,
+    // а снизу поднимаем над безопасной зоной TG: там нижняя кромка уходила под подпись и кнопки
+    if(o.m.isIdentity){const x1=Math.min(x+w,cw-lw/2),y1=Math.min(y+h,ch-_stSafeB(ch)-lw/2);x=Math.max(x,lw/2);y=Math.max(y,lw/2);w=x1-x;h=y1-y;}
     if(w<=0||h<=0)return;
     ctx.strokeStyle=_stNeonColor;ctx.shadowColor=_stNeonColor;ctx.shadowBlur=blur;ctx.lineWidth=lw;
     ctx.beginPath();ctx.roundRect(x,y,w,h,o.r);ctx.stroke();ctx.stroke();
@@ -3772,6 +3785,7 @@ function _stTplHorizon(){
   else if(g&&g.imgEl){_stNeonMark(ctx,0,0,cw,ch);_stImgRect(ctx,g.imgEl,0,0,cw,ch,g.transform);}
   else _stRenderTemplateBg(ctx,cw,ch,g);
   const vig=ctx.createRadialGradient(cw/2,ch*.42,ch*.06,cw/2,ch*.42,ch*.7);vig.addColorStop(0,'rgba(0,0,0,0)');vig.addColorStop(.4,'rgba(0,0,0,0.45)');vig.addColorStop(1,'rgba(0,0,0,0.95)');ctx.fillStyle=vig;ctx.fillRect(0,0,cw,ch);
+  _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх виньетки, но под текстом и QR
   const bot=ctx.createLinearGradient(0,ch*.58,0,ch);bot.addColorStop(0,'rgba(4,4,16,0)');bot.addColorStop(1,'rgba(4,4,16,0.97)');ctx.fillStyle=bot;ctx.fillRect(0,ch*.58,cw,ch*.42);
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(42*sx,14),pfs=Math.max(Math.round(90*sx),28);
