@@ -2038,7 +2038,7 @@ function _redrawCirc4d(ctx,W,H){
   _pinwheelPolys.forEach((poly,si)=>{
     const imgIdx=si+1;const cv=collageCovers[imgIdx];
     ctx.save();ctx.beginPath();poly.forEach(([x,y],k)=>k===0?ctx.moveTo(x,y):ctx.lineTo(x,y));ctx.closePath();ctx.clip();
-    if(cv?.imgEl){const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);const bx=Math.min(...xs),by=Math.min(...ys),bw=Math.max(...xs)-bx,bh=Math.max(...ys)-by;initT(imgIdx);const t=cv.transform;_ccDrawImgBox(ctx,cv.imgEl,bx,by,bw,bh,t.scale,t.ox,t.oy,_collFit==='contain');}
+    if(cv?.imgEl){const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);const bx=Math.min(...xs),by=Math.min(...ys),bw=Math.max(...xs)-bx,bh=Math.max(...ys)-by;initT(imgIdx);const t=cv.transform;_ccDrawImgBox(ctx,cv.imgEl,bx,by,bw,bh,t.scale,t.ox*_collDrawScale,t.oy*_collDrawScale,_collFit==='contain');}
     else{ctx.fillStyle='#1a1a30';ctx.fillRect(0,0,W,H);}
     ctx.restore();
   });
@@ -2602,11 +2602,7 @@ function _stProcBg(ctx,kind,x,y,w,h,g){
 // тот же плоский тёмно-синий градиент, а выбор в строке игры шаблоны не читали вовсе.
 function _stCoverOrBg(ctx,x,y,w,h,g,useTransform){
   _stNeonMark(ctx,x,y,w,h);
-  const r=_stCoverOrBgRaw(ctx,x,y,w,h,g,useTransform);
-  // Обложка во весь кадр не клипуется меньше холста — обводим сразу, чтобы рамка легла ПОД текст,
-  // QR и мини-обложки, а не поверх них (общий проход в конце шаблона рисует поверх всего)
-  if(_stNeonRects&&ctx.getTransform().isIdentity&&x<=0&&y<=0&&w>=ctx.canvas.width&&h>=ctx.canvas.height)_stNeonFlush(ctx);
-  return r;
+  return _stCoverOrBgRaw(ctx,x,y,w,h,g,useTransform);
 }
 function _stCoverOrBgRaw(ctx,x,y,w,h,g,useTransform){
   const kind=(g&&g.bg)||'image';
@@ -3017,6 +3013,7 @@ function _stTplPoster(){
   const oh=Math.round(ch*.50)+sb,grd=ctx.createLinearGradient(0,ch-oh,0,ch); // затемнение поднимается вместе с текстом
   grd.addColorStop(0,'rgba(4,4,16,0)');grd.addColorStop(.4,'rgba(4,4,16,.7)');grd.addColorStop(1,'rgba(4,4,16,.97)');
   ctx.fillStyle=grd;ctx.fillRect(0,ch-oh,cw,oh);
+  _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх затемнения, но под текстом и QR
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(48*sx,16),pfs=Math.max(Math.round(72*sx),24);
   const hasDesc=_stDescOn&&_stShortDescs[g.title];
@@ -3124,6 +3121,7 @@ function _stTplDiag(){
   ctx.save();ctx.beginPath();ctx.moveTo(0,Math.round(ch*.42));ctx.lineTo(cw,Math.round(ch*.62));ctx.lineTo(cw,ch);ctx.lineTo(0,ch);ctx.closePath();
   ctx.fillStyle='rgba(4,4,16,0.93)';ctx.fill();ctx.restore();
   ctx.save();ctx.strokeStyle='rgba(0,112,209,0.9)';ctx.lineWidth=Math.round(4*sx);ctx.beginPath();ctx.moveTo(0,Math.round(ch*.42));ctx.lineTo(cw,Math.round(ch*.62));ctx.stroke();ctx.restore();
+  _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх клина, но под текстом и QR
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(44*sx,14),pfs=Math.max(Math.round(66*sx),22);
   const tlh=tfs*1.1;

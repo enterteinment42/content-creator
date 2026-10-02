@@ -115,10 +115,12 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       const ch = off.h, floor = 1 - _stSafeB(ch) / ch;
       // QR — правый нижний угол над безопасной зоной; берём его середину, без кромки
       return { qr: __diff(__crop(off, .87, floor - .12, .95, floor - .04), __crop(on, .87, floor - .12, .95, floor - .04)),
+               // левая кромка в нижней трети — там «Постер» затемняет, а «Диагональ» кладёт клин
+               edge: __diff(__crop(off, 0, .7, .03, floor - .02), __crop(on, 0, .7, .03, floor - .02)),
                safe: __diff(__crop(off, .1, floor + .03, .9, 1), __crop(on, .1, floor + .03, .9, 1)) };
     }, t);
     // qr — справочно: свечение у края до середины кода не дотягивалось и до правки, падать здесь нечему
-    ok(`неон во весь кадр (${t}): кромка над зоной TG`, r.safe < 1, JSON.stringify(r));
+    ok(`неон во весь кадр (${t}): кромка над зоной TG и видна под затемнением`, r.safe < 1 && r.edge > 20, JSON.stringify(r));
   }
 
   // Экспорт сторис
