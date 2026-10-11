@@ -891,7 +891,8 @@ async function loadSnapshot() {
     if (ts) document.getElementById('snapshot-date').textContent = 'Обновлено: ' + new Date(ts).toLocaleString('ru', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     filtered = [...games];
     renderTable();
-    _stRelinkSlots(); // открытая сторис переживает обновление каталога: адреса, QR и подпись — по новым id
+    // открытая сторис переживает обновление каталога: адреса, QR и подпись — по новым id. Сбой здесь — не сбой каталога
+    try { _stRelinkSlots(); } catch(e) { jError('story_relink', e.message); }
     document.getElementById('loading').style.display = 'none';
     document.getElementById('main').style.display = 'flex';
     jEvent('session_start', { games: games.length, custom: games.filter(g => g._custom).length });
@@ -1268,7 +1269,6 @@ function _mdLabel(s){ return String(s).replace(/\[/g, '(').replace(/\]/g, ')'); 
 // Внутри (..) ссылку обрывают «)» и пробел — кодируем (адреса игр уже закодированы _urlPart, это для шапки/подвала)
 function _mdHref(s){ return String(s).replace(/[()\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')); }
 function _escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function _escAttr(s){ return _escHtml(s).replace(/"/g,'&quot;'); }
 // Поддержка Markdown-ссылок [текст](url) в шапке/подвале — превращаем в настоящий <a>, как у названий игр.
 // _escHtml уже прошёл по всей строке, поэтому в href остаётся только кавычка
 function _mdLinksToHtml(s){
@@ -1303,7 +1303,7 @@ function _outSerialize(mode, root = document.getElementById('out-text'), urls = 
       out += mode==='mdraw' ? `[${label}](${href})`
         : mode==='mdl' ? `[${_mdLabel(label)}](L${urls.push(href)})`
         : mode==='md' ? `[${_mdLabel(label)}](${_mdHref(href)})`
-        : mode==='html' ? `<a href="${_escAttr(href)}">${_escHtml(label)}</a>`
+        : mode==='html' ? `<a href="${esc(href)}">${_escHtml(label)}</a>`
         : mode==='visible' ? label : `${label} (${href})`; // visible — то, что покажет Telegram: адрес ссылки в лимит не входит
       return;
     }
@@ -1651,9 +1651,10 @@ async function aiShrinkPost(){
     const got = new Set(); let unknown = 0;
     const html = _escHtml(text).replace(/\[([^\]\n]+)\]\(\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
       if (urls[n - 1] === undefined) { unknown++; return m; }
-      got.add(+n); return `<a href="${_escAttr(urls[n - 1])}">${label}</a>`;
+      got.add(+n); return `<a href="${esc(urls[n - 1])}">${label}</a>`;
     }).replace(/\n/g, '<br>');
-    const left = /\(\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
+    // Остаток метки — только в форме ссылки «](L2)»: свой текст человека вроде «размер (L2)» сжатию не мешает
+    const left = /\]\(\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
     if (got.size !== urls.length || unknown || left) {
       jError('shrink_links', 'ссылки не восстановлены', { model: descModel, want: urls.length, got: got.size, unknown, left, raw: text });
       showToast(`⚠️ Модель потеряла ссылки (${got.size} из ${urls.length}) — пост не изменён, нажми ещё раз`);
@@ -2595,12 +2596,16 @@ function _stRelinkSlots(){
   const swap={};
   _stG.forEach(s=>{
     if(s.id==null||!s._mk) return;
-    const g=games.find(x=>!x._custom&&x.id===s.id)||games.find(x=>!x._custom&&x.id!=null&&_gameMatchKey(x)===s._mk);
+    // id новый импорт может отдать другой игре — совпадение по id засчитываем, только если это та же игра
+    const same=x=>!x._custom&&x.id!=null&&_gameMatchKey(x)===s._mk;
+    const g=games.find(x=>x.id===s.id&&same(x))||games.find(same);
     if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
+    if(g.priceRUB){ s.priceRUB=g.priceRUB; s.discount=g.discount||0; } // цена в кадре — из того же каталога, что и ссылка
     const u=_stGameUrl(g);
     if(u!==s._gameUrl){ swap[s._gameUrl]=u; s.id=g.id; s._gameUrl=u; }
   });
-  if(!Object.keys(swap).length) return;
+  const open=document.getElementById('story-modal')?.classList.contains('open');
+  if(!Object.keys(swap).length){ if(open) _stRedrawCurrent(); return; } // цена могла смениться и без новых адресов
   (_stEls||[]).forEach(el=>{
     if(el.type!=='qr'||!swap[el.gameUrl]) return;
     el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
@@ -2611,7 +2616,7 @@ function _stRelinkSlots(){
   _stCapText=re(_stCapText); _stCapBot=re(_stCapBot);
   const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
   jEvent('used',{feature:'storyRelink',n:Object.keys(swap).length});
-  if(document.getElementById('story-modal')?.classList.contains('open')) _stRenderTemplate();
+  if(open) _stRedrawCurrent(); // кадр с новыми ценами и QR
 }
 function _stQrSrc(url){ return _safeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=6&data=${encodeURIComponent(url)}`); }
 function _stSetQrOn(v){ _stQrOn=v; localStorage.setItem('cc_qr_on',v?'1':'0'); jEvent('used',{feature:'qrOn',to:v}); _stRenderTemplate(); }

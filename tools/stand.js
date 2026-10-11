@@ -634,7 +634,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const sh2 = await p.evaluate(async () => { const b = document.querySelector('#out-text .cc-regen'); if (b) await regenGameDesc(b); return document.getElementById('out-text').innerText.includes('ПОСЛЕ-СЖАТИЯ'); });
   ok('«✂️ Сжать» не теряет 🔄: кнопки на месте и работают', sh.btns === 3 && sh.descs === 3 && sh2, JSON.stringify({ ...sh, regen: sh2 }));
   claudeQ.length = 0;
-  // Модель пишет метки вольно — «(L 1)», «(l2)» — ссылки всё равно восстанавливаются; текст «[тут](подробнее)», набранный
+  // Модель пишет метки вольно — «(L 1)», «(l2)» — ссылки всё равно восстанавливаются; свой текст «размер (L2)» не мешает; текст «[тут](подробнее)», набранный
   // человеком, остаётся текстом (метки ставятся только настоящим <a>); потерянная ссылка или лишняя метка — пост не трогаем
   const echo = f => body => f(body.messages[0].content.slice(body.messages[0].content.indexOf('Пост:\n') + 6));
   const shCase = async (f, extra) => { claudeQ.push(echo(f)); return p.evaluate(async extra => {
@@ -645,9 +645,9 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     try { await aiShrinkPost(); } finally { window.jError = je; }
     const hrefs = [...box.querySelectorAll('a')].map(a => a.getAttribute('href'));
     return { same: box.innerHTML === before, links: want.every(u => hrefs.includes(u)), bad: hrefs.filter(h => /^L\d|^l\d|подробнее/.test(h)), txt: box.innerText.includes('[тут](подробнее)'),
-      left: /\(\s*[Ll]\s*\d+\s*\)/.test(box.innerText), err, toast: __toast() };
+      left: /\]\(\s*[Ll]\s*\d+\s*\)/.test(box.innerText), err, toast: __toast() };
   }, extra || ''); };
-  const shLoose = await shCase(t => t.replace('](L1)', '](L 1)').replace('](L2)', '](l2)'), ' [тут](подробнее)');
+  const shLoose = await shCase(t => t.replace('](L1)', '](L 1)').replace('](L2)', '](l2)'), ' [тут](подробнее) размер (L2)');
   ok('«✂️ Сжать»: метки «(L 1)», «(l2)» восстанавливаются; набранный «[тут](подробнее)» остаётся текстом',
     /Сжато/.test(shLoose.toast) && shLoose.links && !shLoose.bad.length && shLoose.txt && !shLoose.left && !shLoose.err, JSON.stringify(shLoose));
   const shLost = await shCase(t => t.replace(/\[([^\]]+)\]\(L2\)/, '$1'));
@@ -807,17 +807,20 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const rl = await p.evaluate(async () => {
     stSetGameCount(1); _stActiveSlot = 0; stAddQR(); await _stGenCaption();
     const old = _stGameUrl(_stG[0]), oldId = _stG[0].id, bak = games;
-    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 7 } : g); // «новый импорт»: те же игры, новые id
+    // «новый импорт»: те же игры с новыми id и новой ценой, а старый id слота достался другой игре
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 7, priceRUB: g.priceRUB ? g.priceRUB + 1 : g.priceRUB } : g);
+    const other = games.find(g => g.id != null && !g._custom && _gameMatchKey(g) !== _stG[0]._mk); games = [{ ...other, id: oldId }, ...games];
+    const oldPrice = _stG[0].priceRUB;
     const src = (typeof loadSnapshot === 'function' ? loadSnapshot.toString() : '');
     if (typeof _stRelinkSlots === 'function') _stRelinkSlots();
     const neu = _stGameUrl(_stG[0]), qr = _stEls.filter(e => e.type === 'qr').map(e => e.gameUrl);
-    const r = { old, neu, idNew: _stG[0].id === oldId + 7, qr, cap: _stCapText.includes(neu) && !_stCapText.includes(old), wired: /_stRelinkSlots\(\)/.test(src) };
+    const r = { old, neu, idNew: _stG[0].id === oldId + 7, price: _stG[0].priceRUB === oldPrice + 1, qr, cap: _stCapText.includes(neu) && !_stCapText.includes(old), wired: /_stRelinkSlots\(\)/.test(src) };
     games = bak; if (typeof _stRelinkSlots === 'function') _stRelinkSlots();
     _stEls = _stEls.filter(e => e.type !== 'qr'); _stRenderTemplate();
-    r.back = _stGameUrl(_stG[0]) === old; return r;
+    r.back = _stGameUrl(_stG[0]) === old && _stG[0].priceRUB === oldPrice; return r;
   });
-  ok('замена каталога: адрес слота, QR-элемент и подпись открытой сторис — по новому id, loadSnapshot это вызывает',
-    rl.neu !== rl.old && rl.idNew && rl.qr.length === 1 && rl.qr[0] === rl.neu && rl.cap && rl.wired && rl.back, JSON.stringify(rl));
+  ok('замена каталога: адрес, цена, QR-элемент и подпись открытой сторис — по новому id той же игры (старый id у чужой — не берём), loadSnapshot это вызывает',
+    rl.neu !== rl.old && rl.idNew && rl.price && rl.qr.length === 1 && rl.qr[0] === rl.neu && rl.cap && rl.wired && rl.back, JSON.stringify(rl));
   // «]» в названии не обрывает ссылку в подписи к сторис
   const brk = await p.evaluate(async () => { const t = _stG[0].title; _stG[0].title = 'Rayman [Legends]'; stSetGameCount(1); await _stGenCaption();
     const cap = _stCapText, html = _mdLinksToHtml(cap); _stG[0].title = t; return { cap: cap.slice(0, 120), link: /<a href="https:\/\/poigraem\.shop\/\?game=[^"]+">[^<]*Rayman \(Legends\)/.test(html) }; });
