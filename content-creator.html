@@ -119,6 +119,11 @@
     .fg label { display: block; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
     .txbox { width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-family: 'Noto Sans', sans-serif; font-size: 12px; padding: 8px 10px; resize: vertical; min-height: 60px; outline: none; line-height: 1.6; box-sizing: border-box; }
     .txbox:focus { border-color: var(--blue); }
+    /* 🔄 у игры в посте: служебная кнопка внутри редактируемого текста — не набирается, не выделяется, в вывод не попадает */
+    .cc-regen { margin-left: 6px; cursor: pointer; user-select: none; -webkit-user-select: none; opacity: .55; font-size: 11px; }
+    .cc-regen:hover { opacity: 1; }
+    .cc-regen.busy { opacity: 1; animation: ccspin 1s linear infinite; display: inline-block; cursor: progress; }
+    @keyframes ccspin { to { transform: rotate(360deg); } }
     .bf { width: 100%; background: var(--blue); border: none; border-radius: 8px; color: #fff; font-family: 'Oswald', sans-serif; font-size: 13px; font-weight: 600; letter-spacing: .5px; padding: 9px; cursor: pointer; transition: all .2s; }
     .bf:hover { background: #0085f5; }
     .bf:disabled { opacity: .5; cursor: default; }
@@ -1265,13 +1270,16 @@ function _mdLinksToPlain(s){
 // mode:'md' — для отправки в TG (parse_mode:'Markdown', спецсимволы экранированы);
 // mode:'mdraw' — те же [текст](url)-ссылки, но БЕЗ экранирования — для ИИ-сжатия (модели чистый текст);
 // mode:'plain' — текстовый фолбэк буфера обмена (ссылка рядом со словом в скобках, без разметки).
-function _outSerialize(mode){
-  const root = document.getElementById('out-text');
+// root — другой корень вместо #out-text (снимок версии ИИ собирается во внеэкранном div).
+// Служебные элементы редактора (_OUT_UI: 🔄 у игры) не часть поста — их нет ни в одном режиме и в буфере (copyOut).
+const _OUT_UI = '.cc-regen';
+function _outSerialize(mode, root = document.getElementById('out-text')){
   if (!root) return '';
   let out = '';
   function walk(node){
     if (node.nodeType===3){ out += mode==='md' ? _escMd(node.nodeValue) : mode==='html' ? _escHtml(node.nodeValue) : node.nodeValue; return; }
     if (node.nodeType!==1) return;
+    if (node.matches(_OUT_UI)) return;
     if (node.tagName==='A'){
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
@@ -1290,16 +1298,36 @@ function _outSerialize(mode){
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-async function generateAIPost() {
+// Промпт описаний игр для поста. items: [{title, facts, avoid}] — facts (описание из базы) и avoid
+// (текущий вариант в посте) передаются при переписывании: «🔄 Заново» и 🔄 у отдельной игры.
+function _descPrompt(items) {
+  const rewrite = items.some(x => x.facts || x.avoid);
+  const list = items.map((x, i) => `${i + 1}. ${x.title}`
+    + (x.facts ? `\n   Факты из базы: ${x.facts.slice(0, 500)}` : '')
+    + (x.avoid ? `\n   Текущий вариант (не повторяй): ${x.avoid.slice(0, 500)}` : '')).join('\n');
+  return `Ты — взрослый геймер, который пишет короткие описания игр для интернет-магазина. Пиши так, как написал бы другу: живо, по-человечески, без рекламного пафоса.\n\nЗАПРЕЩЕНО: "захватывающее приключение", "невероятный мир", "погрузитесь в...", "культовый", "легендарный", "шедевр", восклицательные знаки в конце, обращения на "вы".\n\nЧто писать: жанр и суть геймплея + одну конкретную фишку. 2-3 предложения. По-русски.`
+    + (rewrite ? `\n\nЭто ПЕРЕПИСЫВАНИЕ. Где даны факты из базы — опирайся на них и ничего не выдумывай, но пиши своими словами и иначе, чем текущий вариант: другое начало, другая фишка.` : '')
+    + `\n\nВерни СТРОГО валидный JSON, где КЛЮЧ — номер игры из списка (строкой), значение — описание: {"1": "описание", "2": "описание", ...}. Никакого текста вне JSON.\n\nИгры:\n${list}`;
+}
+// Игры собранного поста по порядку — для 🔄 у отдельной игры (data-gi = индекс здесь)
+let _ccPostGames = [];
+function _ccRegenHtml(i) {
+  return `<span class="cc-regen" contenteditable="false" data-gi="${i}" title="Переписать описание этой игры" onclick="regenGameDesc(this)">🔄</span>`;
+}
+// opts.rewrite — «🔄 Заново»: ИИ переписывает описания ВСЕХ игр, а не только пустых; описание из базы
+// уходит подсказкой по фактам, текущий текст поста (opts.avoid: Map игра → текст) — как «не повторяй».
+async function generateAIPost(opts = {}) {
   const sel = games.filter(g => g._sel && g.priceRUB);
   if (!sel.length) { showToast('Выбери хотя бы одну игру!'); return; }
+  const rewrite = !!opts.rewrite, avoid = opts.avoid || new Map();
   const btn = document.getElementById('gen-btn');
   const prog = document.getElementById('gen-prog');
   const status = document.getElementById('gen-status');
   const bar = document.getElementById('gen-bar');
-  const missing = sel.filter(g => !g.description);
+  const missing = rewrite ? sel : sel.filter(g => !g.description);
   btn.disabled = true;
-  btn.textContent = missing.length ? '⏳ Генерирую...' : '📝 Собираю пост...';
+  _ccPostGen++; // ответы 🔄 у игр, запрошенные до пересборки, больше не к этому посту
+  btn.textContent = rewrite ? '⏳ Переписываю...' : missing.length ? '⏳ Генерирую...' : '📝 Собираю пост...';
   if (typeof _tgDisarmSend === 'function') _tgDisarmSend(); // CC-14: пересборка сбрасывает взведённую отправку
   document.getElementById('out-panel').style.display = 'none';
 
@@ -1308,14 +1336,14 @@ async function generateAIPost() {
 
   if (missing.length) {
     prog.style.display = '';
-    status.textContent = `Описаний есть: ${sel.length - missing.length}, нужно дописать: ${missing.length}...`;
+    status.textContent = rewrite ? `Переписываю описания: ${missing.length}...` : `Описаний есть: ${sel.length - missing.length}, нужно дописать: ${missing.length}...`;
     bar.style.width = '15%';
   }
 
   let progValue = 15;
   const ticker = missing.length ? setInterval(() => { progValue = Math.min(progValue + (85 - progValue) * .05, 88); bar.style.width = progValue + '%'; }, 400) : null;
 
-  const genDescs = {}; // временный кэш сгенерированных описаний
+  const genDescs = new Map(); // игра → описание от модели; по объекту, а не по названию: у версий PS4/PS5 названия совпадают
 
   try {
     if (missing.length) {
@@ -1325,8 +1353,8 @@ async function generateAIPost() {
       for (let ci = 0; ci < chunks.length; ci++) {
         const chunk = chunks[ci];
         status.textContent = `Генерирую описания: пакет ${ci + 1}/${chunks.length} (${chunk.length} игр)...`;
-        const list = chunk.map((g, i) => `${i + 1}. ${_displayTitle(g.title)}`).join('\n');
-        const prompt = `Ты — взрослый геймер, который пишет короткие описания игр для интернет-магазина. Пиши так, как написал бы другу: живо, по-человечески, без рекламного пафоса.\n\nЗАПРЕЩЕНО: "захватывающее приключение", "невероятный мир", "погрузитесь в...", "культовый", "легендарный", "шедевр", восклицательные знаки в конце, обращения на "вы".\n\nЧто писать: жанр и суть геймплея + одну конкретную фишку. 2-3 предложения. По-русски.\n\nВерни СТРОГО валидный JSON, где КЛЮЧ — номер игры из списка (строкой), значение — описание: {"1": "описание", "2": "описание", ...}. Никакого текста вне JSON.\n\nИгры:\n${list}`;
+        const prompt = _descPrompt(chunk.map(g => ({ title: _displayTitle(g.title),
+          facts: rewrite ? g.description || '' : '', avoid: rewrite ? avoid.get(g) || '' : '' })));
         const resp = await fetch(API + '/api/claude', {
           method: 'POST', headers: _claudeHeaders(),
           body: JSON.stringify({ model: descModel, max_tokens: 6000, messages: [{ role: 'user', content: prompt }] })
@@ -1344,7 +1372,7 @@ async function generateAIPost() {
         }
         Object.entries(_aiByIndex(parsed)).forEach(([idx, desc]) => {
           const g = chunk[parseInt(idx, 10) - 1];
-          if (g && typeof desc === 'string' && desc.trim()) genDescs[g.title] = desc.trim();
+          if (g && typeof desc === 'string' && desc.trim()) genDescs.set(g, desc.trim());
         });
         progValue = 15 + (ci + 1) / chunks.length * 70;
         bar.style.width = progValue + '%';
@@ -1355,41 +1383,52 @@ async function generateAIPost() {
     status.textContent = 'Собираю пост...';
 
     const lines = [];
-    sel.forEach(g => {
-      const desc = g.description || genDescs[g.title] || '';
+    // Не переписанная при «Заново» игра сохраняет то, что стояло в посте (у игры без описания в базе — прежний текст ИИ)
+    const descs = sel.map(g => genDescs.get(g) || (rewrite && avoid.get(g)) || g.description || '');
+    sel.forEach((g, i) => {
+      const desc = descs[i];
       const dt = _displayTitle(g.title);
       const em = pickEmoji({title:dt,description:desc});
       const price = g.priceRUB.toLocaleString('ru');
       const nameHtml = g.id!=null ? `<a href="${_stGameUrl(g)}">${_escHtml(dt)}</a>` : _escHtml(dt);
-      lines.push(`${em} ${nameHtml} — ${price} руб.<br>${_escHtml(desc)}`);
+      lines.push(`${em} ${nameHtml} — ${price} руб.${_ccRegenHtml(i)}<br><span class="cc-desc" data-gi="${i}">${_escHtml(desc)}</span>`);
     });
     const headerHtml = _mdLinksToHtml(customHeader);
     const footerHtml = _mdLinksToHtml(customFooter);
     document.getElementById('out-text').innerHTML = `${headerHtml}<br><br>${lines.join('<br><br>')}<br><br>${footerHtml}`;
+    _ccPostGames = sel;
 
-    const lost = sel.filter(g => !g.description && !genDescs[g.title]);
+    // При переписывании «потеряна» игра, которую модель не переписала (в посте осталось прежнее описание)
+    const lost = sel.filter(g => !genDescs.has(g) && (rewrite || !g.description));
 
     clearInterval(ticker);
     bar.style.width = '100%';
-    status.textContent = `✅ Готово! Из архива: ${sel.length - missing.length}, новых: ${missing.length - lost.length}` + (lost.length ? `, без описания: ${lost.length}` : '');
+    status.textContent = rewrite
+      ? `✅ Переписано: ${missing.length - lost.length}` + (lost.length ? `, не переписано: ${lost.length}` : '')
+      : `✅ Готово! Из архива: ${sel.length - missing.length}, новых: ${missing.length - lost.length}` + (lost.length ? `, без описания: ${lost.length}` : '');
     _updateOutCount();
     document.getElementById('out-panel').style.display = '';
     // Снимок версии ИИ — строго ДО того, как человек начнёт править #out-text.
     _ccPostBot = _outSerialize('plain');
+    _ccPostBotHtml = document.getElementById('out-text').innerHTML;
     _ccPostEditLogged = '';
     _jAiPasses++;
     jEvent('generated', {
-      mode: 'post', model: descModel, bot: _ccPostBot,
+      mode: 'post', model: descModel, bot: _ccPostBot, rewrite,
       n: sel.length, fromArchive: sel.length - missing.length,
       aiNew: missing.length - lost.length, lost: lost.length,
       lostTitles: lost.map(g => _displayTitle(g.title)),
       aiPasses: _jAiPasses, len: _ccPostBot.length, limit: _tgLimit()
     });
-    showToast(lost.length ? `⚠️ Пост готов, но ${lost.length} игр без описания` : `✅ Пост готов (${sel.length} игр)`);
+    showToast(rewrite
+      ? (lost.length ? `⚠️ Пост переписан, но у ${lost.length} игр осталось прежнее описание` : `✅ Пост переписан (${sel.length} игр)`)
+      : (lost.length ? `⚠️ Пост готов, но ${lost.length} игр без описания` : `✅ Пост готов (${sel.length} игр)`));
     setTimeout(() => prog.style.display = 'none', 2500);
   } catch(e) {
     clearInterval(ticker);
     status.textContent = '❌ ' + e.message;
+    // Прежний пост (возможно, правленый) остаётся в редакторе — не прятать его из-за сбоя пересборки
+    if (_outSerialize('plain')) document.getElementById('out-panel').style.display = '';
     jError('post_gen', e.message, { model: descModel, n: sel.length });
     showToast('Ошибка: ' + e.message);
   } finally {
@@ -1401,8 +1440,97 @@ function regenPost() {
   // Пересборка без правки = версия модели отвергнута целиком (aiPasses в скилле).
   _jPostEdited();
   if (_ccPostBot) jEvent('rejected', { mode: 'post', reason: 'regen', botBefore: _ccPostBot, aiPasses: _jAiPasses });
+  // Раньше «Заново» молча собирал тот же пост из базы: ИИ звался только для игр без описания
+  const avoid = new Map();
+  _ccPostGames.forEach((g, i) => { const t = _ccDescText(document.getElementById('out-text'), i); if (t) avoid.set(g, t); });
   document.getElementById('out-panel').style.display = 'none';
-  generateAIPost();
+  return generateAIPost({ rewrite: true, avoid });
+}
+// 🔄 у отдельной игры: переписать только её абзац (span.cc-desc), не трогая остальной — возможно, правленый — текст
+async function regenGameDesc(btn) {
+  if (!btn || btn.classList.contains('busy')) return; // двойной клик — один запрос
+  const i = +btn.dataset.gi, g = _ccPostGames[i], box = document.getElementById('out-text');
+  if (!g || !box.querySelector(`.cc-desc[data-gi="${i}"]`)) { showToast('⚠️ Абзац описания этой игры не найден — его стёрли вручную. Впиши текст сам или нажми «🔄 Заново»'); return; }
+  const title = _displayTitle(g.title), before = _ccDescText(box, i), gen = _ccPostGen;
+  btn.classList.add('busy');
+  try {
+    const resp = await fetch(API + '/api/claude', {
+      method: 'POST', headers: _claudeHeaders(),
+      body: JSON.stringify({ model: descModel, max_tokens: 1000, messages: [{ role: 'user', content: _descPrompt([{ title, facts: g.description || '', avoid: before }]) }] })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const text = data.content.map(c => c.text || '').join('').replace(/```json|```/g, '').trim();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (e) {
+      jError('post_game_json', 'неверный JSON', { model: descModel, raw: text, title });
+      throw new Error('модель ответила не JSON');
+    }
+    const d = _aiByIndex(parsed)[1];
+    if (typeof d !== 'string' || !d.trim()) throw new Error('модель не вернула описание');
+    // Пока шёл запрос, пост пересобрали («Заново», «Собрать», «Сжать») — ответ уже не к этому тексту
+    if (gen !== _ccPostGen) { showToast('Пост пересобран, пока шла генерация — описание не вставлено'); return; }
+    const after = d.trim();
+    if (!_ccSetDesc(box, i, after)) throw new Error('абзац игры стёрт, пока шла генерация');
+    // Версия ИИ меняется только в этом абзаце — правки человека в остальном тексте журнал по-прежнему видит
+    let botOld = '';
+    if (_ccPostBotHtml) {
+      const bot = document.createElement('div'); bot.innerHTML = _ccPostBotHtml;
+      botOld = _ccDescText(bot, i);
+      if (_ccSetDesc(bot, i, after)) { _ccPostBotHtml = bot.innerHTML; _ccPostBot = _outSerialize('plain', bot); }
+    }
+    _jPostEdited();
+    _jAiPasses++;
+    jEvent('rejected', { mode: 'post_game', reason: 'regen', title, botBefore: botOld, shown: before, aiPasses: _jAiPasses - 1 });
+    jEvent('generated', { mode: 'post_game', model: descModel, title, before, after, aiPasses: _jAiPasses });
+    _tgDisarmSend(); _updateOutCount();
+    showToast(`🔄 Описание «${title}» переписано`);
+  } catch (e) {
+    jError('post_game', e.message, { model: descModel, title });
+    showToast('Ошибка: ' + e.message);
+  } finally {
+    btn.classList.remove('busy');
+  }
+}
+// После пересборки текста целиком («✂️ Сжать ИИ» кладёт ответ модели в innerHTML) кнопки 🔄 и разметка
+// абзацев теряются — восстанавливаем их по ссылкам игр: 🔄 в конец строки с названием, абзац — текст под ней.
+function _outAttachRegen() {
+  const box = document.getElementById('out-text');
+  if (!box) return;
+  _ccPostGames.forEach((g, i) => {
+    if (g.id == null || box.querySelector(`.cc-regen[data-gi="${i}"]`)) return;
+    const href = _stGameUrl(g);
+    const a = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === href);
+    if (!a) return;
+    let n = a;
+    while (n.nextSibling && !(n.nextSibling.nodeType === 1 && n.nextSibling.tagName === 'BR')) n = n.nextSibling;
+    const br = n.nextSibling;
+    a.parentNode.insertBefore(document.createRange().createContextualFragment(_ccRegenHtml(i)), br);
+    if (!br || box.querySelector(`.cc-desc[data-gi="${i}"]`)) return;
+    // Абзацем считаем строку под названием, только если в ней один текст: строка со ссылкой —
+    // это уже следующая игра (модель свела описание в строку с ценой), её не трогаем
+    const parts = [];
+    let t = br.nextSibling;
+    for (; t && t.nodeType === 3; t = t.nextSibling) parts.push(t);
+    if (t && !(t.nodeType === 1 && t.tagName === 'BR')) return;
+    const span = document.createElement('span');
+    span.className = 'cc-desc'; span.dataset.gi = i;
+    br.parentNode.insertBefore(span, br.nextSibling);
+    parts.forEach(t => span.appendChild(t));
+  });
+}
+// Абзац игры i в редакторе. Enter внутри описания в Chrome делит span на несколько с тем же data-gi —
+// читаем все части, а при замене пишем в первую и убираем остальные (иначе хвост старого текста остаётся).
+let _ccPostGen = 0, _ccPostBotHtml = '';
+function _ccDescText(root, i) {
+  return [...root.querySelectorAll(`.cc-desc[data-gi="${i}"]`)].map(s => s.textContent.trim()).filter(Boolean).join('\n');
+}
+function _ccSetDesc(root, i, text) {
+  const spans = [...root.querySelectorAll(`.cc-desc[data-gi="${i}"]`)];
+  if (!spans.length) return false;
+  spans[0].textContent = text;
+  spans.slice(1).forEach(s => { const p = s.parentNode; s.remove(); if (p !== root && p.tagName === 'DIV' && !p.textContent.trim()) p.remove(); });
+  return true;
 }
 // Копируем и HTML (названия — настоящие <a>, при вставке в rich-текстовые поля становятся
 // кликабельной ссылкой прямо в слове, как просил Денис), и текстовый фолбэк "Название (url)"
@@ -1414,7 +1542,11 @@ function copyOut() {
   _jExported = true;
   jEvent('published', { kind: 'copy', mode: 'post', final: plain, len: plain.length,
     editSharePct: _ccPostBot ? jShare(_ccPostBot, plain) : null, aiPasses: _jAiPasses, decisionMin: _jMinutes() });
-  const html = document.getElementById('out-text').innerHTML;
+  // HTML для буфера — без служебных 🔄 и разметки абзацев: только текст, <a> и переносы
+  const clean = document.getElementById('out-text').cloneNode(true);
+  clean.querySelectorAll(_OUT_UI).forEach(el => el.remove());
+  clean.querySelectorAll('.cc-desc').forEach(el => el.replaceWith(...el.childNodes));
+  const html = clean.innerHTML;
   if (window.ClipboardItem) {
     const item = new ClipboardItem({
       'text/plain': new Blob([plain], {type:'text/plain'}),
@@ -1491,10 +1623,12 @@ async function aiShrinkPost(){
     const text = data.content.map(c => c.text || '').join('').trim().replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '').trim();
     if (!text) throw new Error('пустой ответ модели');
     _jPostEdited(); // правку человека фиксируем до того, как её затрёт сжатая версия
+    _ccPostGen++;
     document.getElementById('out-text').innerHTML = _mdLinksToHtml(text);
+    _outAttachRegen();
     _tgDisarmSend(); _updateOutCount();
     const nowLen = _outSerialize('visible').length;
-    _ccPostBot = _outSerialize('plain'); _ccPostEditLogged = ''; _jAiPasses++;
+    _ccPostBot = _outSerialize('plain'); _ccPostBotHtml = document.getElementById('out-text').innerHTML; _ccPostEditLogged = ''; _jAiPasses++;
     jEvent('generated', { mode: 'shrink', model: descModel, bot: _ccPostBot,
       before: visBefore, after: nowLen, target, limit: lim, fits: nowLen <= lim, aiPasses: _jAiPasses });
     showToast(nowLen <= lim ? `✂️ Сжато: ${nowLen.toLocaleString('ru')} символов — влезает` : `⚠️ Всё ещё ${nowLen.toLocaleString('ru')} — нажми ещё раз`);

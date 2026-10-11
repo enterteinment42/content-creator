@@ -489,6 +489,101 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const a4 = await aiPost(JSON.stringify(['ОПИС-1', 'ОПИС-2', 'ОПИС-3']));
   ok('пост: ответ модели массивом раскладывается по играм без сдвига', a4.mapped && /✅ Пост готов \(3 игр\)/.test(a4.toast), JSON.stringify(a4));
   ok('Б-1 пост: заглушка Claude израсходована', claudeQ.length === 0, claudeQ.length + ' в очереди');
+
+  // ── Перегенерация поста ──────────────────────────────────
+  // «🔄 Заново» — ИИ переписывает ВСЕ описания, даже те, что есть в базе (раньше пост молча собирался из базы заново)
+  const nClaude = () => (posted['/api/claude'] || []).length;
+  let nq = nClaude(); claudeQ.push(JSON.stringify({ 1: 'НОВОЕ-1', 2: 'НОВОЕ-2', 3: 'НОВОЕ-3' }));
+  const rg = await p.evaluate(async () => {
+    __sel(3); const sel = games.filter(g => g._sel); await generateAIPost();
+    const r = regenPost(); await (r && r.then ? r : new Promise(res => setTimeout(res, 3000)));
+    const t = document.getElementById('out-text').innerText;
+    return { all: [1, 2, 3].every(i => t.includes('НОВОЕ-' + i)), hasDesc: sel.every(g => g.description), toast: __toast(),
+             facts: sel.map(g => g.description.slice(0, 30)) };
+  });
+  const rgBody = nClaude() > nq ? JSON.parse(posted['/api/claude'].slice(-1)[0]).messages[0].content : '';
+  ok('«🔄 Заново»: ИИ переписывает описания всех игр, даже из базы', nClaude() - nq === 1 && rg.all && rg.hasDesc, JSON.stringify({ asked: nClaude() - nq, ...rg }));
+  ok('«🔄 Заново»: описание из базы уходит модели подсказкой', rg.facts.every(f => rgBody.includes(f)), rgBody.slice(0, 200));
+  claudeQ.length = 0;
+
+  // 🔄 у одной игры: меняется только её абзац, ручная правка в чужом абзаце живёт; двойной клик — один запрос
+  nq = nClaude(); claudeQ.push(JSON.stringify({ 1: 'ОДНА-2' }));
+  const one = await p.evaluate(async () => {
+    const box = document.getElementById('out-text');
+    const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT); let n;
+    while ((n = w.nextNode())) if (n.nodeValue.includes('НОВОЕ-3')) n.nodeValue = n.nodeValue.replace('НОВОЕ-3', 'НОВОЕ-3 РУЧНАЯ-ПРАВКА');
+    const btns = box.querySelectorAll('.cc-regen'); if (btns.length !== 3) return { btns: btns.length };
+    const a = regenGameDesc(btns[1]), b = regenGameDesc(btns[1]); await Promise.all([a, b]);
+    const t = box.innerText;
+    return { btns: btns.length, t: t.slice(0, 400), ok: t.includes('ОДНА-2') && !t.includes('НОВОЕ-2') && t.includes('НОВОЕ-1') && t.includes('НОВОЕ-3 РУЧНАЯ-ПРАВКА') };
+  });
+  ok('🔄 игры: меняется только её абзац, правка в другом сохранена', one.ok && nClaude() - nq === 1, JSON.stringify({ asked: nClaude() - nq, ...one }));
+  claudeQ.length = 0;
+
+  // Кнопки 🔄 и служебная разметка не попадают ни в один вывод
+  nq = (posted['/api/cc-queue'] || []).length; const nt = (posted['/api/tg-post'] || []).length;
+  const outs = await p.evaluate(async () => {
+    let clip = null; window.ClipboardItem = class { constructor(o) { this.o = o; } };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write: async items => { clip = items[0].o; }, writeText: async t => { clip = { 'text/plain': new Blob([t]) }; } } });
+    copyOut(); await new Promise(r => setTimeout(r, 200));
+    const res = {}; for (const m of ['plain', 'visible', 'html', 'md', 'mdraw']) res[m] = _outSerialize(m);
+    if (clip) { res.clipPlain = await clip['text/plain'].text(); res.clipHtml = clip['text/html'] ? await clip['text/html'].text() : ''; }
+    _updateOutCount(); res.count = document.getElementById('out-count').textContent; res.bot = _ccPostBot;
+    _tgDisarmSend(); await queuePostToBot(); sendPostToTG(); await sendPostToTG();
+    return res;
+  });
+  outs.queue = ((posted['/api/cc-queue'] || []).slice(nq)[0] || ''); outs.tg = ((posted['/api/tg-post'] || []).slice(nt)[0] || '');
+  const dirty = Object.entries(outs).filter(([k, v]) => /🔄|cc-regen|cc-desc|data-gi|contenteditable/.test(String(v))).map(([k]) => k);
+  ok('🔄 и служебная разметка не попадают в вывод (копия, канал, очередь, журнал, счётчик)', dirty.length === 0 && outs.clipHtml && outs.queue && outs.tg, dirty.join(',') || JSON.stringify({ clip: !!outs.clipHtml, q: !!outs.queue, tg: !!outs.tg }));
+
+  // Стёртый абзац игры — предупреждение, без запроса и без пересборки
+  nq = nClaude();
+  const gone = await p.evaluate(async () => {
+    const box = document.getElementById('out-text'), d = box.querySelector('.cc-desc'), btn = box.querySelector('.cc-regen');
+    if (!d || !btn) return { miss: true };
+    d.remove(); const before = box.innerHTML; await regenGameDesc(btn);
+    return { same: box.innerHTML === before, toast: __toast() };
+  });
+  ok('🔄 игры: стёртый абзац → предупреждение, текст не тронут', gone.same && /не найден/.test(gone.toast) && nClaude() === nq, JSON.stringify(gone));
+
+  // «✂️ Сжать ИИ» пересобирает текст — кнопки 🔄 возвращаются и работают
+  const md = await p.evaluate(async () => { __sel(3); await generateAIPost(); return _outSerialize('mdraw'); });
+  claudeQ.push(md.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО'));
+  nq = nClaude();
+  const sh = await p.evaluate(async () => { await aiShrinkPost(); const box = document.getElementById('out-text');
+    return { btns: box.querySelectorAll('.cc-regen').length, descs: box.querySelectorAll('.cc-desc').length, t: box.innerText.slice(0, 300) }; });
+  claudeQ.push(JSON.stringify({ 1: 'ПОСЛЕ-СЖАТИЯ' }));
+  const sh2 = await p.evaluate(async () => { const b = document.querySelector('#out-text .cc-regen'); if (b) await regenGameDesc(b); return document.getElementById('out-text').innerText.includes('ПОСЛЕ-СЖАТИЯ'); });
+  ok('«✂️ Сжать» не теряет 🔄: кнопки на месте и работают', sh.btns === 3 && sh.descs === 3 && sh2, JSON.stringify({ ...sh, regen: sh2 }));
+  claudeQ.length = 0;
+
+  // Enter внутри описания делит абзац на части с одним data-gi — 🔄 заменяет его целиком, без хвоста старого текста;
+  // версия ИИ для журнала обновляется в этом абзаце (иначе текст модели засчитался бы правкой человека)
+  claudeQ.push(JSON.stringify({ 1: 'ЦЕЛИКОМ-1' }));
+  const split = await p.evaluate(async () => {
+    __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    const s = box.querySelector('.cc-desc[data-gi="0"]'), tail = s.cloneNode(); tail.textContent = 'ХВОСТ-СТАРОГО';
+    const div = document.createElement('div'); div.appendChild(tail); s.after(div);
+    await regenGameDesc(box.querySelector('.cc-regen[data-gi="0"]'));
+    return { t: box.innerText.slice(0, 200), noTail: !box.innerText.includes('ХВОСТ-СТАРОГО'), has: box.innerText.includes('ЦЕЛИКОМ-1'), bot: _ccPostBot.includes('ЦЕЛИКОМ-1') };
+  });
+  ok('🔄 игры: абзац, разбитый Enter, заменяется целиком; версия ИИ обновлена', split.noTail && split.has && split.bot, JSON.stringify(split));
+
+  // Сбой «Заново» (Claude 500) не прячет прежний пост
+  const fail = await p.evaluate(async () => { const before = _outSerialize('plain'); await regenPost();
+    return { shown: document.getElementById('out-panel').style.display !== 'none', same: _outSerialize('plain') === before }; });
+  ok('«🔄 Заново»: при ошибке прежний пост остаётся на экране', fail.shown && fail.same, JSON.stringify(fail));
+
+  // 🔄 игры в полёте, а пост пересобрали — ответ не вставляется в новый пост
+  claudeQ.push(JSON.stringify({ 1: 'ОПОЗДАВШЕЕ' }));
+  const late = await p.evaluate(async () => {
+    const box = document.getElementById('out-text'), a = regenGameDesc(box.querySelector('.cc-regen[data-gi="1"]'));
+    await generateAIPost(); await a; return { late: box.innerText.includes('ОПОЗДАВШЕЕ'), toast: __toast() };
+  });
+  ok('🔄 игры: ответ после пересборки поста отброшен, без ложного «стёрт»', !late.late && /пересобран/.test(late.toast), JSON.stringify(late));
+  claudeQ.length = 0;
+  await p.evaluate(() => { try { jFlush(); } catch (e) {} }); await sleep(1500);
+  ok('🔄 игры: журнал получил событие post_game', /post_game/.test((posted['/cc/journal'] || []).join('\n')));
   await p.keyboard.press('Escape');
   ok('горячие клавиши: Esc закрывает пост', await p.evaluate(() => !document.getElementById('tg-modal').classList.contains('open')));
 
