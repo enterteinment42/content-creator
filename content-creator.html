@@ -352,8 +352,8 @@
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Для:</span>
           <div style="display:flex;gap:3px;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:2px">
-            <button id="st-plat-tg" onclick="_stSetPlatform('tg')" title="Влияет только на кнопку «Текст к сторис» ниже" style="padding:3px 9px;border-radius:4px;border:none;background:var(--blue);color:#fff;font-size:10px;font-weight:700;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">TG</button>
-            <button id="st-plat-vk" onclick="_stSetPlatform('vk')" title="Влияет только на кнопку «Текст к сторис» ниже" style="padding:3px 9px;border-radius:4px;border:none;background:transparent;color:var(--muted);font-size:10px;font-weight:700;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">VK</button>
+            <button id="st-plat-tg" onclick="_stSetPlatform('tg')" title="Безопасная зона снизу (TG) и кнопка «Текст к сторис» ниже" style="padding:3px 9px;border-radius:4px;border:none;background:var(--blue);color:#fff;font-size:10px;font-weight:700;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">TG</button>
+            <button id="st-plat-vk" onclick="_stSetPlatform('vk')" title="Безопасная зона снизу (TG) и кнопка «Текст к сторис» ниже" style="padding:3px 9px;border-radius:4px;border:none;background:transparent;color:var(--muted);font-size:10px;font-weight:700;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">VK</button>
           </div>
         </div>
         <!-- Card style -->
@@ -1718,11 +1718,15 @@ function _displayTitle(s){
 // есть в matched), low лишь из-за лишней приставки «EA Sports». Мусорный low («NBA 2K26 for» →
 // «NBA 2K26: Slam Edition») не проходит — слова «for» в matched нет. Апострофы вырезаются
 // (обе формы '/’), прочее не-буквенное → пробел (®™ не склеивают слова: Borderlands®4 → borderlands 4).
+// Дополнение тоже содержит все слова игры («Batman: Arkham Knight - Batman: Noel Skin») — его отсекаем
+// по словам DLC, которых нет в самом запросе (запрос «DOOM Soundtrack» саундтрек найти может).
+const _DLC_WORDS=['skin','skins','pack','costume','costumes','outfit','soundtrack','ost','dlc','expansion','season','pass','bundle','addon','upgrade','avatar','theme','episode','chapter','map','maps'];
 function _lowMatchOk(q, matched){
   if(!matched) return false;
   const norm=s=>String(s).toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
   const mw=norm(matched).split(' ');
   const qw=norm(q).split(' ').filter(w=>w.length>1||/^\d$/.test(w));
+  if(_DLC_WORDS.some(w=>mw.includes(w)&&!norm(q).split(' ').includes(w))) return false;
   return qw.length>0 && qw.every(w=>mw.includes(w));
 }
 async function _hdCoverUrl(title){
@@ -1840,6 +1844,9 @@ document.addEventListener('mouseup',e=>{if(!_prevDrag.active) return;const i=_pr
 document.addEventListener('keydown',e=>{
   const tag=(e.target.tagName||'').toLowerCase();const typing=tag==='input'||tag==='textarea'||e.target.isContentEditable;
   if(e.key==='Escape'){
+    // Пикер обложек — не .modal-bg и лежит поверх сторис/коллажа: закрываем сначала его
+    const picker=document.getElementById('cc-img-picker');
+    if(picker&&picker.style.display!=='none'){_closePicker();return;}
     const openModal=document.querySelector('.modal-bg.open');
     if(openModal){
       if(openModal.id==='coll-modal')closeCollage();

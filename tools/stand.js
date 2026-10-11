@@ -89,6 +89,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('_displayTitle: висячий for', dt[0][1] === 'NBA 2K26' && dt[1][1] === 'Game', JSON.stringify(dt));
   const dangling = await p.evaluate(() => games.map(g => _displayTitle(g.title)).filter(t => /\s(for|and|of|the|&|-)$/i.test(t)));
   ok('_displayTitle: висячих хвостов по каталогу нет', dangling.length === 0, dangling.join(' | '));
+  // HD из IGDB: low-ответ с дополнением (скин, пак, сезонный абонемент) — не наша игра; «EA Sports UFC 6» на «UFC 6» — наша
+  const lm = await p.evaluate(() => [['Batman: Arkham Knight', 'Batman: Arkham Knight - Batman: Noel Skin'], ['UFC 6', 'EA Sports UFC 6'],
+    ['Crash Bandicoot N. Sane Trilogy', 'Crash Bandicoot N. Sane Trilogy'], ['DOOM Soundtrack', 'DOOM Soundtrack Vol. 1'], ['Fallout 4', 'Fallout 4: Season Pass']].map(([q, m]) => _lowMatchOk(q, m)));
+  ok('_lowMatchOk: дополнения не проходят, если их нет в запросе', lm.join() === 'false,true,true,true,false', lm.join());
 
   // ── Сторис ─────────────────────────────────────────────────
   await p.evaluate(() => __sel(6)); await p.evaluate(() => openStory());
@@ -325,6 +329,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const html = fs.readFileSync(SRC, 'utf8');
   const dbl = html.match(/<[^>]*style="[^"]*display:\s*none[^"]*display:\s*none[^"]*"[^>]*>/g) || [];
   ok('аудит 46: нет двойного display:none в разметке', dbl.length === 0, dbl.map(s => s.slice(0, 80)).join(' | '));
+  ok('подсказка TG/VK не врёт, что влияет только на текст', !/Влияет только на кнопку/.test(html));
 
   // ── Пост → очередь бота (М1) ──────────────────────────────
   await p.evaluate(() => { __sel(3); openTGPost(); generateAIPost(); });
