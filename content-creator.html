@@ -1266,8 +1266,11 @@ function _renderPostImgBox(){
 function _escMd(s){ return String(s).replace(/([_*\[`])/g, '\\$1'); }
 // Внутри [..] legacy Markdown экранирования нет, а «]» обрывает ссылку — квадратные скобки меняем на круглые
 function _mdLabel(s){ return String(s).replace(/\[/g, '(').replace(/\]/g, ')'); }
+// Процентное кодирование выбранных символов: то, что кодирует encodeURIComponent (пробелы, в т.ч. многобайтные), —
+// им, в UTF-8; остальное (( ) ' ! * он не трогает) — %XX. Общий хелпер для _mdHref и _urlPart
+function _pctEnc(s, rx){ return String(s).replace(rx, c => { const e = encodeURIComponent(c); return e !== c ? e : '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'); }); }
 // Внутри (..) ссылку обрывают «)» и пробел — кодируем (адреса игр уже закодированы _urlPart, это для шапки/подвала)
-function _mdHref(s){ return String(s).replace(/[()\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')); }
+function _mdHref(s){ return _pctEnc(s, /[()\s]/g); }
 function _escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 // Поддержка Markdown-ссылок [текст](url) в шапке/подвале — превращаем в настоящий <a>, как у названий игр.
 // _escHtml уже прошёл по всей строке, поэтому в href остаётся только кавычка
@@ -1283,8 +1286,8 @@ function _mdLinksToPlain(s){
 // mode:'html' — для канала и очереди бота (parse_mode HTML, текст и адреса экранированы);
 // mode:'md' — legacy Markdown для /api/tg-post без format (спецсимволы текста экранированы);
 // mode:'mdraw' — ссылки как [текст](url), без экранирования;
-// mode:'mdl' — для ИИ-сжатия: ссылки как [текст](L1), адреса складываются в urls (метки ставятся только на <a>,
-//   а текст вида «[тут](подробнее)» остаётся текстом);
+// mode:'mdl' — для ИИ-сжатия: ссылки как [текст](@L1), в urls складываются { href, label } (метки ставятся только
+//   на <a>, а текст вида «[тут](подробнее)» или набранный «[x](L1)» остаётся текстом);
 // mode:'visible' — то, что покажет Telegram (для лимита);
 // mode:'plain' — текстовый фолбэк буфера обмена (ссылка рядом со словом в скобках, без разметки).
 // root — другой корень вместо #out-text (снимок версии ИИ собирается во внеэкранном div).
@@ -1301,7 +1304,7 @@ function _outSerialize(mode, root = document.getElementById('out-text'), urls = 
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
       out += mode==='mdraw' ? `[${label}](${href})`
-        : mode==='mdl' ? `[${_mdLabel(label)}](L${urls.push(href)})`
+        : mode==='mdl' ? `[${_mdLabel(label)}](@L${urls.push({ href, label })})`
         : mode==='md' ? `[${_mdLabel(label)}](${_mdHref(href)})`
         : mode==='html' ? `<a href="${esc(href)}">${_escHtml(label)}</a>`
         : mode==='visible' ? label : `${label} (${href})`; // visible — то, что покажет Telegram: адрес ссылки в лимит не входит
@@ -1627,7 +1630,7 @@ function _updateOutCount(){
 // сокращаются только описания. Ответ модели кладётся обратно в редактор (ссылки снова живые <a>).
 async function aiShrinkPost(){
   const btn = document.getElementById('out-shrink-btn');
-  // Адреса ссылок (длинные, с t и p) модели не показываем: вместо них метки L1, L2… — модель не может их
+  // Адреса ссылок (длинные, с t и p) модели не показываем: вместо них метки @L1, @L2… — модель не может их
   // исказить (пробел вместо %20, потерянный &p= у двойника), а _outAttachRegen после сжатия находит ссылки по точному href.
   // Метки ставит сериализатор только настоящим <a> — текст вида «[тут](подробнее)» в шапке остаётся текстом
   const urls = [];
@@ -1639,22 +1642,29 @@ async function aiShrinkPost(){
   const target = Math.floor(lim * .93) + raw.length - visBefore;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Сжимаю...'; }
   try {
-    const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](L1) сохрани ВСЕ до единой, метку в скобках (L1, L2…) не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
+    const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](@L1) сохрани ВСЕ до единой, метку в скобках (@L1, @L2…) не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
     const resp = await fetch(API + '/api/claude', { method: 'POST', headers: _claudeHeaders(), body: JSON.stringify({ model: descModel, max_tokens: 3000, messages: [{ role: 'user', content: prompt }] }) });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     const text = data.content.map(c => c.text || '').join('').trim().replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '').trim();
     if (!text) throw new Error('пустой ответ модели');
-    // Обратно в <a> превращаются только метки L1…Ln (терпимо к «(L 1)», «(l1)», пробелам); прочие [..](..) — текст.
-    // Каждая ссылка обязана вернуться и ни одна метка не должна остаться — иначе в канал уехал бы href="L3"
+    // Обратно в <a> превращаются только метки @L1…@Ln (терпимо к «(@L 1)», «(@l1)», пробелам); «@» — чтобы набранный
+    // человеком «[x](L1)» не стал ссылкой на игру. В тексте метки нет «[» — лишняя «[» перед ссылкой остаётся текстом.
+    // Каждая ссылка обязана вернуться и ни одна метка не должна остаться — иначе в канал уехал бы href="@L3"
     // или пропала бы ссылка игры (а с ней 🔄). Тогда пост не трогаем.
     const got = new Set(); let unknown = 0;
-    const html = _escHtml(text).replace(/\[([^\]\n]+)\]\(\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
-      if (urls[n - 1] === undefined) { unknown++; return m; }
-      got.add(+n); return `<a href="${esc(urls[n - 1])}">${label}</a>`;
-    }).replace(/\n/g, '<br>');
-    // Остаток метки — только в форме ссылки «](L2)»: свой текст человека вроде «размер (L2)» сжатию не мешает
-    const left = /\]\(\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
+    const html = _escHtml(text).replace(/\[([^\[\]\n]+)\]\(\s*@\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
+      const u = urls[n - 1];
+      if (u === undefined) { unknown++; return m; }
+      got.add(+n);
+      // Модели ушли круглые скобки вместо квадратных (_mdLabel) — текст не менялся, возвращаем исходный
+      const lab = label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label) : label;
+      return `<a href="${esc(u.href)}">${lab}</a>`;
+    }) // набранные вручную [текст](https://…) — снова живые ссылки, как до меток (только http(s): прочее — текст)
+      .replace(/\[([^\[\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, label, href) => `<a href="${href.replace(/"/g, '&quot;')}">${label}</a>`)
+      .replace(/\n/g, '<br>');
+    // Остаток метки — только в форме ссылки «](@L2)»: свой текст человека вроде «размер (L2)» сжатию не мешает
+    const left = /\]\(\s*@\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
     if (got.size !== urls.length || unknown || left) {
       jError('shrink_links', 'ссылки не восстановлены', { model: descModel, want: urls.length, got: got.size, unknown, left, raw: text });
       showToast(`⚠️ Модель потеряла ссылки (${got.size} из ${urls.length}) — пост не изменён, нажми ещё раз`);
@@ -2572,7 +2582,7 @@ const ST_QR_MIN=90;    // меньше ~90px в файле 1080×1920 телеф
 // ищет по нормализованному названию и платформе. _normKey — точная копия normalizeKey магазина (js/utils.js:287),
 // title — как есть в снапшоте, не _displayTitle. ( ) ' и пробел кодируем: иначе Markdown-ссылка [..](url) рвётся на «)».
 function _normKey(s){ return String(s||'').replace(/[‘’‚‛′‵`]/g,"'").replace(/[™®©]/g,'').replace(/\s+/g,' ').trim().toLowerCase(); }
-function _urlPart(s){ return encodeURIComponent(s).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase()); }
+function _urlPart(s){ return _pctEnc(encodeURIComponent(s),/[!'()*]/g); }
 // Если сервер начнёт отдавать в снапшоте готовый ключ (g.key = normalizeKey магазина) — берём его, копия не нужна.
 function _gameKey(g){ return (typeof g.key==='string'&&g.key)?g.key:_normKey(g.title); }
 // Слоты сторис (_stG, батч) несут title уже после _displayTitle и без _platform — адрес им считается заранее
@@ -2593,31 +2603,56 @@ function _gameMatchKey(g){ return _gameKey(g)+'|'+(g._platform||''); }
 // пересчитываются, иначе QR и текст в открытой сторис вели бы на старый id, а новый пост — на новый.
 function _stRelinkSlots(){
   if(!_stG||!_stG.length) return;
-  const swap={};
+  const swap={}, reprice=[], dupes=[];
   _stG.forEach(s=>{
     if(s.id==null||!s._mk) return;
     // id новый импорт может отдать другой игре — совпадение по id засчитываем, только если это та же игра
     const same=x=>!x._custom&&x.id!=null&&_gameMatchKey(x)===s._mk;
-    const g=games.find(x=>x.id===s.id&&same(x))||games.find(same);
+    let g=games.find(x=>x.id===s.id&&same(x));
+    if(!g){
+      // Старого id нет. Дубли с той же платформой и разной ценой импорт оставляет — берём тот, что с ценой слота;
+      // такого нет — не гадаем: чужая цена в кадре и QR на другую карточку хуже прежнего адреса
+      const c=games.filter(same);
+      g=c.length>1?c.find(x=>x.priceRUB===s.priceRUB):c[0];
+      if(!g&&c.length>1){ dupes.push(s.title); return; }
+    }
     if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
+    const oldUrl=s._gameUrl, oldP=s.priceRUB;
     if(g.priceRUB){ s.priceRUB=g.priceRUB; s.discount=g.discount||0; } // цена в кадре — из того же каталога, что и ссылка
     const u=_stGameUrl(g);
-    if(u!==s._gameUrl){ swap[s._gameUrl]=u; s.id=g.id; s._gameUrl=u; }
+    if(u!==oldUrl){ swap[oldUrl]=u; s.id=g.id; s._gameUrl=u; }
+    if(oldP&&s.priceRUB!==oldP&&u) reprice.push({ u, from: oldP, to: s.priceRUB });
   });
+  if(dupes.length){
+    jError('story_relink_dupes','несколько игр с тем же названием и платформой, ни одной с ценой слота',{titles:dupes});
+    showToast(`⚠️ В каталоге несколько «${dupes[0]}» с другой ценой — слот не обновлён, проверь игру`);
+  }
   const open=document.getElementById('story-modal')?.classList.contains('open');
-  if(!Object.keys(swap).length){ if(open) _stRedrawCurrent(); return; } // цена могла смениться и без новых адресов
+  if(!Object.keys(swap).length&&!reprice.length){ if(open) _stRedrawCurrent(); return; }
   (_stEls||[]).forEach(el=>{
     if(el.type!=='qr'||!swap[el.gameUrl]) return;
     el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
   });
   // Одним проходом: при последовательной замене новый адрес одного слота мог совпасть со старым другого и заменился бы дважды
-  const rx=new RegExp(Object.keys(swap).sort((a,b)=>b.length-a.length).map(a=>a.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'g');
-  const re=s=>(s||'').replace(rx,m=>swap[m]);
-  _stCapText=re(_stCapText); _stCapBot=re(_stCapBot);
+  const keys=Object.keys(swap);
+  const rx=keys.length?new RegExp(keys.sort((a,b)=>b.length-a.length).map(_reEsc).join('|'),'g'):null;
+  // Цена в подписи — у строки своей игры: «[название](адрес) — 1 990 руб.», как её пишет _stGenCaption.
+  // Не нашли (человек правил подпись) — цену не трогаем и просим проверить
+  let missed=0;
+  const price=(s,count)=>reprice.reduce((t,r)=>{
+    if(!t.includes(r.u)) return t; // этой игры в подписи нет — нечего проверять
+    const out=t.replace(new RegExp('(\\]\\('+_reEsc(r.u)+'\\) — )'+_reEsc(r.from.toLocaleString('ru'))+' руб\\.','g'),`$1${r.to.toLocaleString('ru')} руб.`);
+    if(out===t&&count) missed++;
+    return out;
+  },s);
+  const re=(s,count)=>s?price(rx?s.replace(rx,m=>swap[m]):s,count):s;
+  _stCapText=re(_stCapText,true); _stCapBot=re(_stCapBot,false);
   const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
-  jEvent('used',{feature:'storyRelink',n:Object.keys(swap).length});
+  if(missed) showToast('⚠️ Цены в каталоге изменились — проверь цены в подписи к сторис');
+  jEvent('used',{feature:'storyRelink',n:keys.length,reprice:reprice.length,missed});
   if(open) _stRedrawCurrent(); // кадр с новыми ценами и QR
 }
+function _reEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 function _stQrSrc(url){ return _safeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=6&data=${encodeURIComponent(url)}`); }
 function _stSetQrOn(v){ _stQrOn=v; localStorage.setItem('cc_qr_on',v?'1':'0'); jEvent('used',{feature:'qrOn',to:v}); _stRenderTemplate(); }
 function _stQrFits(size,sx){ return size>=ST_QR_MIN*sx; }

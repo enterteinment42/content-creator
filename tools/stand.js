@@ -630,12 +630,12 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const sh = await p.evaluate(async () => { await aiShrinkPost(); const box = document.getElementById('out-text');
     const want = _ccPostGames.map(g => _stGameUrl(g)), got = [...box.querySelectorAll('a')].map(a => a.getAttribute('href'));
     return { btns: box.querySelectorAll('.cc-regen').length, descs: box.querySelectorAll('.cc-desc').length, hrefs: want.every(u => got.includes(u)), t: box.innerText.slice(0, 300) }; });
-  ok('«✂️ Сжать»: модель не видит адресов ссылок, адреса в посте восстановлены точно', shPrompt && !/poigraem\.shop|t\.me/.test(shPrompt) && /\]\(L1\)/.test(shPrompt) && sh.hrefs, JSON.stringify({ hrefs: sh.hrefs, prompt: shPrompt.slice(-200) }));
+  ok('«✂️ Сжать»: модель не видит адресов ссылок, адреса в посте восстановлены точно', shPrompt && !/poigraem\.shop|t\.me/.test(shPrompt) && /\]\(@L1\)/.test(shPrompt) && sh.hrefs, JSON.stringify({ hrefs: sh.hrefs, prompt: shPrompt.slice(-200) }));
   claudeQ.push(JSON.stringify({ 1: 'ПОСЛЕ-СЖАТИЯ' }));
   const sh2 = await p.evaluate(async () => { const b = document.querySelector('#out-text .cc-regen'); if (b) await regenGameDesc(b); return document.getElementById('out-text').innerText.includes('ПОСЛЕ-СЖАТИЯ'); });
   ok('«✂️ Сжать» не теряет 🔄: кнопки на месте и работают', sh.btns === 3 && sh.descs === 3 && sh2, JSON.stringify({ ...sh, regen: sh2 }));
   claudeQ.length = 0;
-  // Модель пишет метки вольно — «(L 1)», «(l2)» — ссылки всё равно восстанавливаются; свой текст «размер (L2)» не мешает; текст «[тут](подробнее)», набранный
+  // Модель пишет метки вольно — «(@L 1)», «(@l2)» — ссылки всё равно восстанавливаются; свой текст «размер (L2)» не мешает; текст «[тут](подробнее)», набранный
   // человеком, остаётся текстом (метки ставятся только настоящим <a>); потерянная ссылка или лишняя метка — пост не трогаем
   const echo = f => body => f(body.messages[0].content.slice(body.messages[0].content.indexOf('Пост:\n') + 6));
   const shCase = async (f, extra) => { claudeQ.push(echo(f)); return p.evaluate(async extra => {
@@ -645,16 +645,35 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     const je = window.jError; window.jError = function (k) { if (k === 'shrink_links') err++; return je.apply(this, arguments); };
     try { await aiShrinkPost(); } finally { window.jError = je; }
     const hrefs = [...box.querySelectorAll('a')].map(a => a.getAttribute('href'));
-    return { same: box.innerHTML === before, links: want.every(u => hrefs.includes(u)), bad: hrefs.filter(h => /^L\d|^l\d|подробнее/.test(h)), txt: box.innerText.includes('[тут](подробнее)'),
-      left: /\]\(\s*[Ll]\s*\d+\s*\)/.test(box.innerText), err, toast: __toast() };
+    return { same: box.innerHTML === before, links: want.every(u => hrefs.includes(u)), bad: hrefs.filter(h => /^@|^L\d|^l\d|подробнее/.test(h)), txt: box.innerText.includes('[тут](подробнее)'),
+      left: /\]\(\s*@\s*[Ll]\s*\d+\s*\)/.test(box.innerText), err, toast: __toast() };
   }, extra || ''); };
-  const shLoose = await shCase(t => t.replace('](L1)', '](L 1)').replace('](L2)', '](l2)'), ' [тут](подробнее) размер (L2)');
-  ok('«✂️ Сжать»: метки «(L 1)», «(l2)» восстанавливаются; набранный «[тут](подробнее)» остаётся текстом',
+  const shLoose = await shCase(t => t.replace('](@L1)', '](@L 1)').replace('](@L2)', '](@l2)'), ' [тут](подробнее) размер (L2)');
+  ok('«✂️ Сжать»: метки «(@L 1)», «(@l2)» восстанавливаются; набранный «[тут](подробнее)» остаётся текстом',
     /Сжато/.test(shLoose.toast) && shLoose.links && !shLoose.bad.length && shLoose.txt && !shLoose.left && !shLoose.err, JSON.stringify(shLoose));
-  const shLost = await shCase(t => t.replace(/\[([^\]]+)\]\(L2\)/, '$1'));
-  const shExtra = await shCase(t => t + '\n[лишняя](L9)');
+  const shLost = await shCase(t => t.replace(/\[([^\]]+)\]\(@L2\)/, '$1'));
+  const shExtra = await shCase(t => t + '\n[лишняя](@L9)');
   ok('«✂️ Сжать»: потерянная ссылка или чужая метка — предупреждение, пост не изменён, ошибка в журнал',
     shLost.same && /потеряла ссылки/.test(shLost.toast) && shLost.err === 1 && shExtra.same && shExtra.err === 1, JSON.stringify({ shLost, shExtra }));
+  // Лишняя «[» перед ссылкой на той же строке не затягивается в текст ссылки
+  const shBr = await shCase(t => t.replace('[', '[Скидки ['));
+  const brA = await p.evaluate(() => { const a = document.querySelector('#out-text a'); return a ? a.textContent : ''; });
+  ok('«✂️ Сжать»: лишняя «[» перед ссылкой остаётся текстом, не входит в ссылку', /Сжато/.test(shBr.toast) && brA && !/[\[\]]|Скидки/.test(brA), JSON.stringify({ toast: shBr.toast, a: brA }));
+  // Набранная вручную markdown-ссылка с http(s) после сжатия снова живая; набранный «[см.](L1)» — текст, а не ссылка на игру
+  const shMd = await shCase(t => t, ' [подробнее](https://t.me/x) [см.](L1)');
+  const mdA = await p.evaluate(() => [...document.querySelectorAll('#out-text a')].map(a => [a.textContent, a.getAttribute('href')]));
+  ok('«✂️ Сжать»: ручная [текст](https://…) — ссылка, набранный «[см.](L1)» остаётся текстом',
+    /Сжато/.test(shMd.toast) && mdA.some(([t, h]) => t === 'подробнее' && h === 'https://t.me/x') && !mdA.some(([t]) => t === 'см.') && /\[см\.\]\(L1\)/.test(await p.evaluate(() => document.getElementById('out-text').innerText)),
+    JSON.stringify({ toast: shMd.toast, a: mdA.filter(([, h]) => !/poigraem/.test(h)) }));
+  // «[ ]» в тексте ссылки шапки/подвала переживают сжатие (модели уходят круглые — возвращаем исходные)
+  claudeQ.push(echo(t => t));
+  const shHd = await p.evaluate(async () => { __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    const a = document.createElement('a'); a.href = 'https://t.me/promo'; a.textContent = '[Акция] подписка'; box.prepend(a, document.createElement('br'));
+    await aiShrinkPost(); const b = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === 'https://t.me/promo'); return { label: b ? b.textContent : null, toast: __toast() }; });
+  ok('«✂️ Сжать»: «[Акция]» в ссылке шапки остаётся с квадратными скобками', shHd.label === '[Акция] подписка', JSON.stringify(shHd));
+  // Один хелпер процентного кодирования: ( ) ' пробел — как раньше; многобайтный пробел кодируется в UTF-8, а не «%2003»
+  const enc = await p.evaluate(() => ({ md: _mdHref('https://a.b/x (1)'), em: _mdHref('a b'), up: _urlPart("a'b (c)*") }));
+  ok('кодирование адресов: _mdHref и _urlPart, многобайтный пробел в UTF-8', enc.md === 'https://a.b/x%20%281%29' && enc.em === 'a%E2%80%83b' && enc.up === 'a%27b%20%28c%29%2A', JSON.stringify(enc));
   claudeQ.length = 0;
 
   // Enter внутри описания делит абзац на части с одним data-gi — 🔄 заменяет его целиком, без хвоста старого текста;
@@ -822,6 +841,31 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   });
   ok('замена каталога: адрес, цена, QR-элемент и подпись открытой сторис — по новому id той же игры (старый id у чужой — не берём), loadSnapshot это вызывает',
     rl.neu !== rl.old && rl.idNew && rl.price && rl.qr.length === 1 && rl.qr[0] === rl.neu && rl.cap && rl.wired && rl.back, JSON.stringify(rl));
+  // Цена в подписи меняется вместе с ценой кадра (у строки этой игры); правленую подпись, где цену не найти, не трогаем — тост
+  const rp = await p.evaluate(async () => {
+    stSetGameCount(1); await _stGenCaption(); const bak = games, g0 = _stG[0], oldP = g0.priceRUB, rub = v => v.toLocaleString('ru') + ' руб.';
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 3, priceRUB: g.priceRUB ? g.priceRUB + 10 : g.priceRUB } : g);
+    _stRelinkSlots();
+    const capNew = _stCapText.includes('](' + _stGameUrl(_stG[0]) + ') — ' + rub(oldP + 10)), capOld = _stCapText.includes(rub(oldP));
+    _stCapText = _stCapText.replace(/ — [^\n]*руб\./, ''); document.getElementById('st-cap-text').value = _stCapText;
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 3, priceRUB: g.priceRUB ? g.priceRUB + 10 : g.priceRUB } : g);
+    _stRelinkSlots(); const r = { capNew, capOld, untouched: !/руб\./.test(_stCapText) && _stCapText.includes(_stGameUrl(_stG[0])), toast: __toast() };
+    games = bak; _stRelinkSlots(); return r;
+  });
+  ok('замена каталога: цена в подписи к сторис — новая; подпись без цены не трогается, тост «проверь цены»',
+    rp.capNew && !rp.capOld && rp.untouched && /проверь цены/i.test(rp.toast), JSON.stringify(rp));
+  // Нет старого id, а игр с тем же названием и платформой несколько (дубли с разной ценой): берём с той же ценой; такой нет — слот не трогаем
+  const rd = await p.evaluate(() => {
+    stSetGameCount(1); const bak = games, s = _stG[0], g = games.find(x => !x._custom && _gameMatchKey(x) === s._mk), id0 = s.id, p0 = s.priceRUB;
+    const rest = games.filter(x => x !== g);
+    games = [{ ...g, id: 9e12 + 1, priceRUB: p0 + 50 }, { ...g, id: 9e12 + 2, priceRUB: p0 }, ...rest]; _stRelinkSlots();
+    const pick = { id: _stG[0].id === 9e12 + 2, price: _stG[0].priceRUB === p0 };
+    games = [{ ...g, id: 9e12 + 3, priceRUB: p0 + 50 }, { ...g, id: 9e12 + 4, priceRUB: p0 + 70 }, ...rest]; _stRelinkSlots();
+    const keep = { id: _stG[0].id === 9e12 + 2, price: _stG[0].priceRUB === p0, toast: __toast() };
+    games = bak; _stG[0].id = id0; _stG[0]._gameUrl = _stGameUrl(g); _stG[0].priceRUB = p0; _stRelinkSlots(); return { pick, keep, back: _stG[0].id === id0 };
+  });
+  ok('замена каталога: из дублей с той же платформой берётся тот, что с той же ценой; нет такого — слот не перецепляется, тост',
+    rd.pick.id && rd.pick.price && rd.keep.id && rd.keep.price && /несколько/i.test(rd.keep.toast) && rd.back, JSON.stringify(rd));
   // «]» в названии не обрывает ссылку в подписи к сторис
   const brk = await p.evaluate(async () => { const t = _stG[0].title; _stG[0].title = 'Rayman [Legends]'; stSetGameCount(1); await _stGenCaption();
     const cap = _stCapText, html = _mdLinksToHtml(cap); _stG[0].title = t; return { cap: cap.slice(0, 120), link: /<a href="https:\/\/poigraem\.shop\/\?game=[^"]+">[^<]*Rayman \(Legends\)/.test(html) }; });
