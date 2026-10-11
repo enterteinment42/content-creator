@@ -589,7 +589,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
 
   // ── Метка платформы у двойников (PS4 и PS4/PS5 — разные товары, а _displayTitle платформу вырезает) ──
   // Заглушки — только чтобы на версии без метки проверки честно падали, а не роняли стенд
-  const plStubs = () => p.evaluate(() => { if (typeof _platTag !== 'function') { window._platTag = () => ''; window._stSetPlat = () => {}; window._collSetPlat = () => {}; window._wrapTitle = (x, t, tag, w, n) => _wrapLines(x, t, w, n); } });
+  const plStubs = () => p.evaluate(() => { if (typeof _platTag !== 'function') { window._platTag = () => ''; window._stSetPlat = () => {}; window._collSetPlat = () => {}; window._wrapTitle = (x, t, tag, w, n) => _wrapLines(x, t, w, n); } if (typeof _stDK !== 'function') window._stDK = g => g.title; });
   await plStubs();
   const pl = await p.evaluate(() => {
     const key = g => String(_displayTitle(g.title) || '').replace(/[™®©]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -638,10 +638,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const wt = await p.evaluate(() => {
     const x = document.createElement('canvas').getContext('2d'); x.font = "600 40px 'Noto Sans',sans-serif";
     const ls = _wrapTitle(x, 'Очень длинное название игры, которое никак не помещается в две строки карточки', 'PS4/PS5', 300, 2);
-    return { ls, w: ls.map(l => Math.round(x.measureText(l).width)), short: _wrapTitle(x, 'GT 7', 'PS4', 300, 2), none: _wrapTitle(x, 'GT 7', '', 300, 2) };
+    return { ls, w: ls.map(l => Math.round(x.measureText(l).width)), short: _wrapTitle(x, 'GT 7', 'PS4', 300, 2), none: _wrapTitle(x, 'GT 7', '', 300, 2), narrow: _wrapTitle(x, 'Gran Turismo 7', 'PS4/PS5', 150, 2) };
   });
   ok('метка на картинке: длинное название режется, метка цела, ширина в пределах',
-    wt.ls.length === 2 && wt.ls[1].endsWith('(PS4/PS5)') && wt.ls.join(' ').includes('…') && wt.w.every(w => w <= 300) && wt.short.join(' ') === 'GT 7 (PS4)' && wt.none.join(' ') === 'GT 7', JSON.stringify(wt));
+    wt.ls.length === 2 && wt.ls[1].endsWith('(PS4/PS5)') && wt.ls.join(' ').includes('…') && wt.w.every(w => w <= 300) && wt.short.join(' ') === 'GT 7 (PS4)' && wt.none.join(' ') === 'GT 7' && wt.narrow.length === 2 && wt.narrow[1] === '(PS4/PS5)', JSON.stringify(wt));
 
   // Сторис: метка у двойника на картинке во всех шаблонах; переключатель её убирает; у одиночки кадр не меняется.
   // Запись fillText — какие строки шаблон реально нарисовал (метка не обрезана «…» на конце)
@@ -665,6 +665,19 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('метка в сторис: у двойника во всех шаблонах n=1..3, цела, переключатель её убирает', stPl.length && !stBad.length, JSON.stringify(stBad.length ? stBad : stPl.length));
   const stCap = await p.evaluate(async () => { stSetGameCount(2); await _stGenCaption(); return _stCapText; });
   ok('метка в тексте к сторис у двойников', lab.tw.every(s => stCap.includes(s)), stCap.slice(0, 160));
+  // Короткие описания двойников не затирают друг друга (ключ — название с платформой)
+  claudeQ.push(JSON.stringify({ 1: 'КОР-А', 2: 'КОР-Б' }));
+  const twD = await p.evaluate(async () => { stSetGameCount(2); _stShortDescs = {}; await _stGenShortDescs(); const r = _stG.slice(0, 2).map(g => _stShortDescs[_stDK(g)] || null); _stShortDescs = {}; _stRenderTemplate(); return r; });
+  ok('короткие описания двойников в сторис — у каждого своё', twD.join() === 'КОР-А,КОР-Б', JSON.stringify(twD));
+  claudeQ.length = 0;
+  // Батч: у двойников разные имена файлов
+  const twB = await p.evaluate(async () => { window.__dl = []; await downloadStoryBatch(); return __dl.map(d => d.name); });
+  ok('батч-сторис: у двойников разные имена файлов, с платформой', twB.length === 3 && new Set(twB).size === 3 && twB.some(n => /gran-turismo-7-ps4\.png$/.test(n)) && twB.some(n => /gran-turismo-7-ps4-ps5\.png$/.test(n)), JSON.stringify(twB));
+  // Пресет бренда помнит переключатель метки
+  const twP = await p.evaluate(() => { const pr = window.prompt; _stSetPlat(false); _collSetPlat(false); window.prompt = () => 'stand-plat'; brandSaveCurrent(); window.prompt = pr;
+    _stSetPlat(true); _collSetPlat(true); brandApply('stand-plat'); const r = { st: _stPlatOn, cl: _collPlatOn };
+    const all = _brandList(); delete all['stand-plat']; localStorage.setItem('cc_brand_presets', JSON.stringify(all)); _stSetPlat(true); _collSetPlat(true); return r; });
+  ok('пресет бренда сохраняет и возвращает переключатели метки', twP.st === false && twP.cl === false, JSON.stringify(twP));
   await p.evaluate(() => { _stSetMode('templates'); _stSetPlat(true); closeStory(); games.forEach(g => g._sel = false); games.filter(g => g._platform && g.priceRUB && !_platTag(g)).slice(0, 3).forEach(g => g._sel = true); openStory(); });
   await sleep(8000);
   const stSingle = await p.evaluate(() => _ST_TPLS.map(t => { stSetGameCount(3); _stSetTpl(t.id); _stSetPlat(false); const a = __snap('st-canvas'); _stSetPlat(true); const b = __snap('st-canvas'); _stSetPlat(false); const c = __snap('st-canvas'); _stSetPlat(true); return { t: t.id, onOff: __diff(a, b), stable: __diff(a, c) }; }));

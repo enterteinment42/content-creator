@@ -786,7 +786,7 @@ function jShare(before, after){
 function jSelSnapshot(list){
   try {
     const arr = (list || []).map(g => ({
-      t: _displayTitle(g.title || ''), p: g.priceRUB || 0, d: g.discount || 0,
+      t: g.title ? _pubTitle(g) : '', p: g.priceRUB || 0, d: g.discount || 0,
       desc: !!g.description, custom: !!(g._custom || g.custom)
     }));
     return {
@@ -968,8 +968,8 @@ function removeCustomItem(cid) {
 // ── Пресеты бренда ─────────────────────────────────────────
 // Именованный снимок всех «брендовых» localStorage-ключей: шапка/подвал поста, лого (URL/позиция/
 // форма), цвета коллажа, фоны, шаблон сторис. Разные каналы (PS-игры / консоли / …) — разные пресеты.
-const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on','cc_img_filter','cc_img_filter_amt','cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color'];
-const BRAND_KEYS_LATE = new Set(['cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color']);
+const BRAND_KEYS = ['tg_header','tg_footer','cc_logo_url','cc_logo_pos','cc_logo_shape','cc_frame_color','cc_bg_color','cc_collage_bg_style','cc_st_bg_style','cc_tpl_id','cc_desc_on','cc_qr_on','cc_img_filter','cc_img_filter_amt','cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color','cc_st_plat','cc_coll_plat'];
+const BRAND_KEYS_LATE = new Set(['cc_st_fit','cc_st_neon','cc_st_neon_color','cc_coll_fit','cc_coll_neon','cc_coll_neon_color','cc_st_plat','cc_coll_plat']);
 function _brandList() { try { return JSON.parse(localStorage.getItem('cc_brand_presets') || '{}'); } catch(_) { return {}; } }
 function _brandRenderSel() {
   const sel = document.getElementById('brand-sel'); if (!sel) return;
@@ -1017,6 +1017,7 @@ function _brandApplyLive() {
   _stImgFilterAmt = _stReadFilterAmt();
   _stFit = localStorage.getItem('cc_st_fit') === 'contain' ? 'contain' : 'cover';
   _stNeonOn = localStorage.getItem('cc_st_neon') === '1'; _stNeonColor = _ccReadColor('cc_st_neon_color');
+  _stPlatOn = localStorage.getItem('cc_st_plat') !== '0'; _collPlatOn = localStorage.getItem('cc_coll_plat') !== '0';
   _collFit = localStorage.getItem('cc_coll_fit') === 'contain' ? 'contain' : 'cover';
   _collNeon = localStorage.getItem('cc_coll_neon') === '1'; _collNeonColor = _ccReadColor('cc_coll_neon_color');
   _stLogoImg = null; _collageLogoImg = null;
@@ -1372,7 +1373,7 @@ async function generateAIPost(opts = {}) {
           console.warn(`Пакет ${ci + 1}: неверный JSON`, text);
           // Раньше пакет пропадал молча: игры оставались без описания, а причина
           // жила только в консоли того браузера, где это случилось.
-          jError('post_json', `пакет ${ci + 1}: неверный JSON`, { model: descModel, raw: text, titles: chunk.map(g => _displayTitle(g.title)) });
+          jError('post_json', `пакет ${ci + 1}: неверный JSON`, { model: descModel, raw: text, titles: chunk.map(g => _pubTitle(g)) });
           continue;
         }
         Object.entries(_aiByIndex(parsed)).forEach(([idx, desc]) => {
@@ -1422,7 +1423,7 @@ async function generateAIPost(opts = {}) {
       mode: 'post', model: descModel, bot: _ccPostBot, rewrite,
       n: sel.length, fromArchive: sel.length - missing.length,
       aiNew: missing.length - lost.length, lost: lost.length,
-      lostTitles: lost.map(g => _displayTitle(g.title)),
+      lostTitles: lost.map(g => _pubTitle(g)),
       aiPasses: _jAiPasses, len: _ccPostBot.length, limit: _tgLimit()
     });
     showToast(rewrite
@@ -1868,7 +1869,8 @@ function _platTag(g) {
   return s && s.size > 1 ? g._platform : '';
 }
 // Название для текста публикации (пост, подпись к сторис, промпт): у двойника — с платформой
-function _pubTitle(g) { const t = _displayTitle(g.title), p = _platTag(g); return p ? `${t} (${p})` : t; }
+function _withPlat(t, p) { return p ? `${t} (${p})` : t; } // единый формат «Название (PS4)»
+function _pubTitle(g) { return _withPlat(_displayTitle(g.title), _platTag(g)); }
 // HD-обложка только для коллажа/сторис: ищем в IGDB по очищенному названию (console → фолбэк
 // edition, как в магазине), тянем t_1080p (≈810×1080) через VPS-прокси /igdb/img (обход DPI +
 // CORS для canvas). Возвращает крупный URL или null (слабое/не найдено) — тогда остаётся 264px.
@@ -2327,18 +2329,23 @@ function _wrapTitle(ctx,title,tag,maxW,maxLines){
   const suf=' ('+tag+')',fits=ls=>ls.length<=maxLines&&ls.every(l=>ctx.measureText(l).width<=maxW);
   let ls=_splitLines(ctx,title+suf,maxW);
   if(fits(ls))return ls;
-  for(let t=String(title||'');t.length>1;){
-    t=t.slice(0,-1).replace(/\s+$/,'');
-    ls=_splitLines(ctx,t+'…'+suf,maxW);
-    if(fits(ls))return ls;
-  }
+  // Самый длинный обрезок названия, который влезает вместе с меткой, — двоичным поиском: превью
+  // перерисовывается на каждое движение мыши, посимвольный перебор стоил бы сотни measureText на кадр
+  const s=String(title||''),cut=k=>_splitLines(ctx,s.slice(0,k).replace(/\s+$/,'')+'…'+suf,maxW);
+  let lo=1,hi=s.length-1,best=null;
+  while(lo<=hi){const k=(lo+hi)>>1,c=cut(k);if(fits(c)){best=c;lo=k+1;}else hi=k-1;}
+  if(best)return best;
+  // Не влезает даже первая буква с меткой (узкая ячейка): метка — отдельной последней строкой, а не под «…»
+  if(maxLines>1)return [..._wrapLines(ctx,s,maxW,maxLines-1),suf.trim()];
   return _wrapLines(ctx,title+suf,maxW,maxLines);
 }
 // Название игры на картинке сторис/коллажа: метка платформы у двойников, если её не выключили
 function _stImgTitleTag(g){return _stPlatOn&&g&&g.plat||'';}
 function _collImgTitleTag(c){return _collPlatOn&&c&&c.plat||'';}
 // В тексте публикации (подпись к сторис, промпт) метка у двойника есть всегда — как в посте
-function _stPub(g){return g.plat?`${g.title} (${g.plat})`:g.title;}
+function _stPub(g){return _withPlat(g.title,g.plat);}
+// Ключ коротких описаний сторис: у двойников PS4/PS5 названия совпадают — ключ с платформой
+function _stDK(g){return _stPub(g);}
 function _drawCardOverlay(ctx,cell,c,edge){
   edge=edge||'bottom'; // CC-4: 'top' — плашка у верхнего края (верхние ячейки фигурных макетов)
   const cardStyle=document.getElementById('coll-card-style')?.value||'dark';
@@ -2593,7 +2600,7 @@ function _stCornerQr(ctx,cw,ch,g){
 // barH сильнее поднимался клампом и «попадал» в полосу кода — описание сужалось и резалось
 // многоточием там, где реальный двухстрочный блок кода не касается.
 function _stDescHitsQr(ctx,g,y,qrTop,qrBot,w,maxLines){
-  if(!_stDescOn||!g||!_stShortDescs[g.title])return false;
+  if(!_stDescOn||!g||!_stShortDescs[_stDK(g)])return false;
   const bh=_stDrawDescZone(ctx,0,0,w,g,true,maxLines);
   if(!bh)return false;
   const yy=Math.max(0,Math.min(y,_stFloor(ctx.canvas.height)-bh));
@@ -3059,7 +3066,7 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc,inset){
   ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),textW,2);ctx.restore();
   const titleH=tlines.length*tlh;
   // CC-8: описание рисуем ВНУТРИ плашки под ценой; высота плашки растёт от контента (без описания — как раньше, 30%)
-  const descStr=(showDesc&&_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
+  const descStr=(showDesc&&_stDescOn&&_stShortDescs[_stDK(g)])?_stShortDescs[_stDK(g)]:'';
   // Описание внутри плашки — та же логика, что у зоны описания: строк до четырёх, кегль ужимается.
   // Число строк дополнительно ограничено тем, что физически влезает в предельную высоту плашки (52%
   // слота): иначе текст перехлестнул бы цену — плашке расти дальше некуда.
@@ -3110,8 +3117,8 @@ function _stDescLinesFor(ctx,y){
   return Math.max(2,Math.min(ST_DESC_MAX_LINES,Math.floor((_stFloor(ctx.canvas.height)-y-Math.round(32*sx))/lh)));
 }
 function _stDrawDescZone(ctx,x,y,w,g,measureOnly,maxLines){
-  if(!_stDescOn||!g||!_stShortDescs[g.title])return 0;
-  const sx=ctx.canvas.width/STORY_W,desc=_stShortDescs[g.title],pad=Math.round(16*sx);
+  if(!_stDescOn||!g||!_stShortDescs[_stDK(g)])return 0;
+  const sx=ctx.canvas.width/STORY_W,desc=_stShortDescs[_stDK(g)],pad=Math.round(16*sx);
   ctx.save();
   const fit=_fitLines(ctx,desc,w-pad*2,{fs:Math.max(34*sx,12),minFs:Math.max(24*sx,10),lh:1.4,
     maxLines:Math.max(1,Math.min(ST_DESC_MAX_LINES,maxLines||ST_DESC_MAX_LINES)),font:f=>`${f}px 'Noto Sans',sans-serif`});
@@ -3133,15 +3140,15 @@ function _stDescTargetGame(){
 }
 function _stEditDesc(v){
   const g=_stDescTargetGame();if(!g)return;
-  if(v.trim())_stShortDescs[g.title]=v; else delete _stShortDescs[g.title];
+  if(v.trim())_stShortDescs[_stDK(g)]=v; else delete _stShortDescs[_stDK(g)];
   // Правка описания на картинке. Схлопнута по игре: поле шлёт oninput на каждую
   // букву, а в журнале нужна законченная фраза рядом с версией модели.
   // Описание, набранное руками без генерации, — тоже сигнал (человек не пользуется
   // ИИ на этом шаге), поэтому событие пишем. Но editSharePct у него null, а не 100:
   // «переписано на 100%» относительно пустой версии модели завысило бы главную
   // метрику качества ИИ текстом, которого модель не писала.
-  const ai=_stShortDescsAI[g.title];
-  jAgg('desc:'+g.title,'edited',{mode:'story_desc',title:g.title,
+  const ai=_stShortDescsAI[_stDK(g)];
+  jAgg('desc:'+_stDK(g),'edited',{mode:'story_desc',title:_stDK(g),
     botBefore:ai||null,edited:v,
     editSharePct:ai!==undefined?jShare(ai,v):null,
     fromAI:ai!==undefined},undefined,undefined,1500);
@@ -3160,7 +3167,7 @@ function _stSyncDescEdit(force){
   const ta=document.getElementById('st-desc-edit');if(!ta)return;
   if(!force&&document.activeElement===ta)return; // не перебиваем то, что человек печатает прямо сейчас
   const g=_stDescTargetGame();
-  ta.value=g?(_stShortDescs[g.title]||''):'';
+  ta.value=g?(_stShortDescs[_stDK(g)]||''):'';
 }
 // ── Template Renderer (dispatcher) ────────────────────────
 function _stRenderTemplate(){
@@ -3247,7 +3254,7 @@ function _stTplPoster(){
   _stNeonFlush(ctx); // рамка обложки во весь кадр — поверх затемнения, но под текстом и QR
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(48*sx,16),pfs=Math.max(Math.round(72*sx),24);
-  const hasDesc=_stDescOn&&_stShortDescs[g.title];
+  const hasDesc=_stDescOn&&_stShortDescs[_stDK(g)];
   const qr=_stCornerQr(ctx,cw,ch,g); // нижний правый угол — описание сужается на его ширину
   // Название + цена + описание — один блок, прижатый к низу кадра: раньше блок стоял на фиксированной
   // высоте (72-78%), и под ним оставалась пустая тёмная полоса примерно в пятую часть сторис.
@@ -3366,7 +3373,7 @@ function _stTplDiag(){
   const sb=_stSafeB(ch),miniH=Math.round(ch*.15),miniY=ch-sb-miniH; // мини-обложки тоже над зоной — у них цена
   const bottomLimit=n>1?miniY-pad:ch-Math.max(Math.round(ch*.05),sb);
   const qrRes=bottomLimit>qr.top?qr.res:0;
-  const dscH=(_stDescOn&&_stShortDescs[g.title])?_stDrawDescZone(ctx,0,0,cw-qrRes,g,true):0;
+  const dscH=(_stDescOn&&_stShortDescs[_stDK(g)])?_stDrawDescZone(ctx,0,0,cw-qrRes,g,true):0;
   const blockH=titleH+Math.round(10*sx)+pfs+dscH;
   const infoY=Math.max(Math.round(ch*.46),Math.round(bottomLimit-blockH));
   ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='#fff';ctx.textAlign='left';ctx.textBaseline='top';
@@ -3465,7 +3472,7 @@ function _stTemplateToEditor(){
     // Описание раньше не переносилось вовсе: уходишь в редактор — текст с картинки пропадал
     // (в элементах были только название, цена, скидка, QR и лого). Под него плашка становится выше,
     // а содержимое распределяется как в шаблоне: название сверху, описание в середине, цена внизу.
-    const dtxt=(_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
+    const dtxt=(_stDescOn&&_stShortDescs[_stDK(g)])?_stShortDescs[_stDK(g)]:'';
     const cardH=Math.round(slotH*(dtxt?0.42:0.30));const cardY=i*slotH+slotH-cardH;
     // QR из шаблона переносим отдельным элементом — иначе доработка в редакторе молча теряет ссылку.
     // Размер — те же правила, что в шаблоне: от базовой (не выросшей) высоты плашки, но не шире 20%
@@ -3478,7 +3485,7 @@ function _stTemplateToEditor(){
     // CC-10: тёмная плашка-подложка (как в шаблоне) — иначе тексты висят прямо на картинке
     _stEls.push({type:'overlay',x:0,y:cardY,w:STORY_W,h:cardH,text:'',fontSize:10,fontFamily:'Noto Sans',color:'rgba(0,0,0,0)',bgColor:'rgba(8,8,20,0.92)',opacity:1});
     // title overlay
-    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:textW,h:titleH,text:_stImgTitleTag(g)?`${g.title} (${g.plat})`:g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
+    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:textW,h:titleH,text:_stImgTitleTag(g)?_stPub(g):g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
     // description overlay
     if(dtxt){
       const dH=Math.max(40,cardH-(titleH+14)-118); // 118 — место под плашку цены у нижней кромки
@@ -3506,7 +3513,7 @@ function _stTemplateToEditor(){
 
 // ── Short Descriptions (VK) ───────────────────────────────
 async function _stGenShortDescs(){
-  const needed=_stG.slice(0,Math.min(_stGameCount,3)).filter(g=>g&&!_stShortDescs[g.title]);
+  const needed=_stG.slice(0,Math.min(_stGameCount,3)).filter(g=>g&&!_stShortDescs[_stDK(g)]);
   if(!needed.length){_stRenderTemplate();return;}
   const btn=document.getElementById('st-gen-short-btn');
   const prog=document.getElementById('st-gen-short-prog');
@@ -3521,13 +3528,13 @@ async function _stGenShortDescs(){
     const data=await resp.json();
     const text=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
     const parsed=JSON.parse(text);
-    Object.entries(_aiByIndex(parsed)).forEach(([idx,d])=>{const g=needed[parseInt(idx,10)-1];if(g&&typeof d==='string'&&d.trim())_stShortDescs[g.title]=d.trim();});
+    Object.entries(_aiByIndex(parsed)).forEach(([idx,d])=>{const g=needed[parseInt(idx,10)-1];if(g&&typeof d==='string'&&d.trim())_stShortDescs[_stDK(g)]=d.trim();});
     // Снимок версии модели ДО правок: _stEditDesc пишет прямо в _stShortDescs.
     const got={},lost=[];
-    needed.forEach(g=>{ if(_stShortDescs[g.title]){ got[g.title]=_stShortDescs[g.title]; _stShortDescsAI[g.title]=_stShortDescs[g.title]; } else lost.push(g.title); });
+    needed.forEach(g=>{ if(_stShortDescs[_stDK(g)]){ got[_stDK(g)]=_stShortDescs[_stDK(g)]; _stShortDescsAI[_stDK(g)]=_stShortDescs[_stDK(g)]; } else lost.push(_stDK(g)); });
     _jAiPasses++;
     jEvent('generated',{mode:'story_desc',model:descModel,tpl:_stTplId,
-      titles:needed.map(g=>g.title),bot:JSON.stringify(got),lost:lost.length,lostTitles:lost,
+      titles:needed.map(_stDK),bot:JSON.stringify(got),lost:lost.length,lostTitles:lost,
       withDesc:needed.filter(g=>g.description).length,aiPasses:_jAiPasses});
     _stRenderTemplate();
     // Как Б-2 у поста: потеря видна человеку, а не только в журнале
@@ -3569,7 +3576,7 @@ async function _stGenCaption(){
     _jAiPasses++;
     jEvent('generated',{mode:'story_caption',model:descModel,platform:_stPlatform,tpl:_stTplId,
       bot:_stCapText,n:sel.length,titles:sel.map(g=>g.title),
-      aiNew:Object.keys(genDescs).length,fromArchive:sel.length-missing.length,aiPasses:_jAiPasses});
+      aiNew:genDescs.size,fromArchive:sel.length-missing.length,aiPasses:_jAiPasses});
     document.getElementById('st-cap-text').value=_stCapText; // поле редактируемое: правки уезжают в _stCapText через oninput
     document.getElementById('st-cap-out').style.display='';
     const lost=missing.filter(g=>!genDescs.has(g)).length;
@@ -4052,7 +4059,7 @@ function _stTplHorizon(){
   const qr=_stCornerQr(ctx,cw,ch,g);
   const _dH=_stDrawDescZone(ctx,0,0,cw,g,true); // блок описания вырос — низ кадра держим свободным
   const dY=n>1?Math.min(Math.round(ch*.88),Math.round(_stFloor(ch)-_dH-ch*.02)):Math.round(centerY+pfs+Math.round(20*sx));
-  if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
+  if(_stDescOn&&_stShortDescs[_stDK(g)])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
 // ── NEW Template: Неоновый ─────────────────────────────────
@@ -4106,7 +4113,7 @@ function _stTplNeon(){
   // фиксированных 88%: иначе выросший блок упирался бы в край и наезжал на цену
   const _dH=_stDrawDescZone(ctx,0,0,cw,g,true);
   const dY=Math.min(Math.round(ch*.88),Math.round(_stFloor(ch)-_dH-ch*.02));
-  if(_stDescOn&&_stShortDescs[g.title])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
+  if(_stDescOn&&_stShortDescs[_stDK(g)])_stDrawDescZone(ctx,0,dY,cw-(_stDescHitsQr(ctx,g,dY,qr.top,qr.bot,cw)?qr.res:0),g);
   qr.draw();
 }
 function downloadStory(){
@@ -4152,7 +4159,7 @@ function _jStoryState(){
   try{
     const n=Math.min(_stGameCount,_stG.length);
     const shown=_stG.slice(0,n);
-    const shares=shown.map(g=>_stShortDescsAI[g.title]!==undefined?jShare(_stShortDescsAI[g.title],_stShortDescs[g.title]||''):null).filter(x=>x!==null);
+    const shares=shown.map(g=>_stShortDescsAI[_stDK(g)]!==undefined?jShare(_stShortDescsAI[_stDK(g)],_stShortDescs[_stDK(g)]||''):null).filter(x=>x!==null);
     return {
       tpl:_stTplId,mode:_stMode,platform:_stPlatform,cardStyle:_stCardStyle,bgStyle:_stBgStyle,
       logoPos:_stLogoPos,logoShape:_logoShape,descOn:_stDescOn,qrOn:_stQrOn,fit:_stFit,neon:_stNeonOn?_stNeonColor:null,
@@ -4215,7 +4222,7 @@ async function downloadStoryBatch(){
       finally{ _stG=prevG;_stGameCount=prevCount;_stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel; }
       const a=document.createElement('a');
       a.href=off.toDataURL('image/png');
-      a.download='story-'+_slugify(entry.title)+'.png';
+      a.download='story-'+_slugify(_stPub(entry))+'.png'; // у двойников PS4/PS5 — с платформой, иначе файлы совпали бы
       a.click();
       ok++;
     }catch(err){fail++;jError('story_batch',err.message,{title:entry.title});}
