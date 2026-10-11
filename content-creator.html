@@ -1653,6 +1653,8 @@ async function aiShrinkPost(){
     // Каждая ссылка обязана вернуться и ни одна метка не должна остаться — иначе в канал уехал бы href="@L3"
     // или пропала бы ссылка игры (а с ней 🔄). Тогда пост не трогаем.
     const got = new Set(); let unknown = 0;
+    const MANUAL_LINK = /\[([^\[\]\n<]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    const typed = new Set([..._escHtml(raw).matchAll(MANUAL_LINK)].map(m => m[2]));
     const html = _escHtml(text).replace(/\[([^\[\]\n]+)\]\(\s*@\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
       const u = urls[n - 1];
       if (u === undefined) { unknown++; return m; }
@@ -1660,8 +1662,9 @@ async function aiShrinkPost(){
       // Модели ушли круглые скобки вместо квадратных (_mdLabel) — текст не менялся, возвращаем исходный
       const lab = label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label) : label;
       return `<a href="${esc(u.href)}">${lab}</a>`;
-    }) // набранные вручную [текст](https://…) — снова живые ссылки, как до меток (только http(s): прочее — текст)
-      .replace(/\[([^\[\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (m, label, href) => `<a href="${href.replace(/"/g, '&quot;')}">${label}</a>`)
+    }) // набранные вручную [текст](https://…) — снова живые ссылки (только http(s) и только те, что были в посте до сжатия:
+       // ссылку, придуманную моделью, оставляем текстом). «<» в тексте нет — внутрь восстановленной <a> не заворачиваем
+      .replace(MANUAL_LINK, (m, label, href) => typed.has(href) ? `<a href="${href.replace(/"/g, '&quot;')}">${label}</a>` : m)
       .replace(/\n/g, '<br>');
     // Остаток метки — только в форме ссылки «](@L2)»: свой текст человека вроде «размер (L2)» сжатию не мешает
     const left = /\]\(\s*@\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
@@ -2614,21 +2617,27 @@ function _stRelinkSlots(){
       // такого нет — не гадаем: чужая цена в кадре и QR на другую карточку хуже прежнего адреса
       const c=games.filter(same);
       g=c.length>1?c.find(x=>x.priceRUB===s.priceRUB):c[0];
-      if(!g&&c.length>1){ dupes.push(s.title); return; }
+      // Предупреждаем один раз на слот: иначе тост повторялся бы при каждой загрузке каталога
+      if(!g&&c.length>1){ if(!s._dupWarned){ s._dupWarned=true; dupes.push(s.title); } return; }
     }
     if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
+    s._dupWarned=false;
     const oldUrl=s._gameUrl, oldP=s.priceRUB;
     if(g.priceRUB){ s.priceRUB=g.priceRUB; s.discount=g.discount||0; } // цена в кадре — из того же каталога, что и ссылка
     const u=_stGameUrl(g);
     if(u!==oldUrl){ swap[oldUrl]=u; s.id=g.id; s._gameUrl=u; }
-    if(oldP&&s.priceRUB!==oldP&&u) reprice.push({ u, from: oldP, to: s.priceRUB });
+    // одна игра в двух слотах — одна замена цены (вторая ничего бы не нашла и подняла ложный «проверь цены»)
+    if(oldP&&s.priceRUB!==oldP&&u&&!reprice.some(r=>r.u===u)) reprice.push({ u, from: oldP, to: s.priceRUB });
   });
+  // Оба предупреждения — одним тостом: второй showToast затёр бы первый
+  const warn=[];
   if(dupes.length){
     jError('story_relink_dupes','несколько игр с тем же названием и платформой, ни одной с ценой слота',{titles:dupes});
-    showToast(`⚠️ В каталоге несколько «${dupes[0]}» с другой ценой — слот не обновлён, проверь игру`);
+    warn.push(`в каталоге несколько «${dupes[0]}» с другой ценой — слот не обновлён, проверь игру`);
   }
   const open=document.getElementById('story-modal')?.classList.contains('open');
-  if(!Object.keys(swap).length&&!reprice.length){ if(open) _stRedrawCurrent(); return; }
+  const flush=()=>{ if(warn.length) showToast('⚠️ '+warn.join('; ')); };
+  if(!Object.keys(swap).length&&!reprice.length){ flush(); if(open) _stRedrawCurrent(); return; }
   (_stEls||[]).forEach(el=>{
     if(el.type!=='qr'||!swap[el.gameUrl]) return;
     el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
@@ -2648,7 +2657,8 @@ function _stRelinkSlots(){
   const re=(s,count)=>s?price(rx?s.replace(rx,m=>swap[m]):s,count):s;
   _stCapText=re(_stCapText,true); _stCapBot=re(_stCapBot,false);
   const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
-  if(missed) showToast('⚠️ Цены в каталоге изменились — проверь цены в подписи к сторис');
+  if(missed) warn.push('цены в каталоге изменились — проверь цены в подписи к сторис');
+  flush();
   jEvent('used',{feature:'storyRelink',n:keys.length,reprice:reprice.length,missed});
   if(open) _stRedrawCurrent(); // кадр с новыми ценами и QR
 }

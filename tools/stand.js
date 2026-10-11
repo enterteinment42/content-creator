@@ -660,10 +660,11 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const brA = await p.evaluate(() => { const a = document.querySelector('#out-text a'); return a ? a.textContent : ''; });
   ok('«✂️ Сжать»: лишняя «[» перед ссылкой остаётся текстом, не входит в ссылку', /Сжато/.test(shBr.toast) && brA && !/[\[\]]|Скидки/.test(brA), JSON.stringify({ toast: shBr.toast, a: brA }));
   // Набранная вручную markdown-ссылка с http(s) после сжатия снова живая; набранный «[см.](L1)» — текст, а не ссылка на игру
-  const shMd = await shCase(t => t, ' [подробнее](https://t.me/x) [см.](L1)');
+  // Ссылку, придуманную моделью, живой не делаем — только набранные человеком
+  const shMd = await shCase(t => t + '\n[магазин](https://poigraem.shop/sale)', ' [подробнее](https://t.me/x) [см.](L1)');
   const mdA = await p.evaluate(() => [...document.querySelectorAll('#out-text a')].map(a => [a.textContent, a.getAttribute('href')]));
-  ok('«✂️ Сжать»: ручная [текст](https://…) — ссылка, набранный «[см.](L1)» остаётся текстом',
-    /Сжато/.test(shMd.toast) && mdA.some(([t, h]) => t === 'подробнее' && h === 'https://t.me/x') && !mdA.some(([t]) => t === 'см.') && /\[см\.\]\(L1\)/.test(await p.evaluate(() => document.getElementById('out-text').innerText)),
+  ok('«✂️ Сжать»: ручная [текст](https://…) — ссылка, придуманная моделью и набранный «[см.](L1)» — текст',
+    /Сжато/.test(shMd.toast) && mdA.some(([t, h]) => t === 'подробнее' && h === 'https://t.me/x') && !mdA.some(([t, h]) => t === 'см.' || /sale/.test(h)) && /\[см\.\]\(L1\)/.test(await p.evaluate(() => document.getElementById('out-text').innerText)),
     JSON.stringify({ toast: shMd.toast, a: mdA.filter(([, h]) => !/poigraem/.test(h)) }));
   // «[ ]» в тексте ссылки шапки/подвала переживают сжатие (модели уходят круглые — возвращаем исходные)
   claudeQ.push(echo(t => t));
