@@ -1434,14 +1434,16 @@ function _copyPlainFallback(t) {
 }
 // Прямая отправка готового поста в канал @play_best_games (backend/server.js: POST /api/tg-post).
 // Токен — тот же, что в PS Store вкладке пикера обложек (localStorage cc_admin_token).
+// Ответ модели «номер игры → описание». Просим объект {"1": …}, но модель иногда отдаёт массив —
+// его ключи "0", "1"… сдвинули бы описания на одну игру. Массив переводим в нумерацию с 1;
+// строку или число (не объект) не разбираем вовсе — иначе описаниями стали бы отдельные буквы.
+function _aiByIndex(parsed){
+  if (Array.isArray(parsed)) return Object.fromEntries(parsed.map((d, i) => [i + 1, d]));
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
 // Заголовки для /api/claude — прокси теперь требует админ-токен (SEC-1).
 // Токен тот же cc_admin_token, что для PS Store вкладки и отправки в канал;
 // если не введён — спрашивается один раз и сохраняется.
-// Ответ модели «номер игры → описание». Просим объект {"1": …}, но модель иногда отдаёт массив —
-// его ключи "0", "1"… сдвинули бы описания на одну игру. Массив переводим в нумерацию с 1.
-function _aiByIndex(parsed){
-  return Array.isArray(parsed) ? Object.fromEntries(parsed.map((d, i) => [i + 1, d])) : (parsed || {});
-}
 function _claudeHeaders(){
   let token = localStorage.getItem('cc_admin_token') || '';
   if (!token) {
@@ -1477,8 +1479,9 @@ async function aiShrinkPost(){
   const raw = _outSerialize('mdraw');
   if (!raw) { showToast('Сначала собери пост'); return; }
   const lim = _tgLimit();
+  const visBefore = _outSerialize('visible').length;
   // Модель видит текст с адресами ссылок, а лимит считается по видимому — адреса добавляем к цели
-  const target = Math.floor(lim * .93) + raw.length - _outSerialize('visible').length;
+  const target = Math.floor(lim * .93) + raw.length - visBefore;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Сжимаю...'; }
   try {
     const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](url) сохрани ВСЕ до единой, URL не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
@@ -1493,10 +1496,10 @@ async function aiShrinkPost(){
     const nowLen = _outSerialize('visible').length;
     _ccPostBot = _outSerialize('plain'); _ccPostEditLogged = ''; _jAiPasses++;
     jEvent('generated', { mode: 'shrink', model: descModel, bot: _ccPostBot,
-      before: raw.length, after: nowLen, target, limit: lim, fits: nowLen <= lim, aiPasses: _jAiPasses });
+      before: visBefore, after: nowLen, target, limit: lim, fits: nowLen <= lim, aiPasses: _jAiPasses });
     showToast(nowLen <= lim ? `✂️ Сжато: ${nowLen.toLocaleString('ru')} символов — влезает` : `⚠️ Всё ещё ${nowLen.toLocaleString('ru')} — нажми ещё раз`);
   } catch(e) {
-    jError('shrink', e.message, { model: descModel, before: raw.length, limit: lim });
+    jError('shrink', e.message, { model: descModel, before: visBefore, limit: lim });
     showToast('Ошибка сжатия: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '✂️ Сжать ИИ до лимита'; }
@@ -1725,8 +1728,12 @@ function _lowMatchOk(q, matched){
   if(!matched) return false;
   const norm=s=>String(s).toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
   const mw=norm(matched).split(' ');
-  const qw=norm(q).split(' ').filter(w=>w.length>1||/^\d$/.test(w));
-  if(_DLC_WORDS.some(w=>mw.includes(w)&&!norm(q).split(' ').includes(w))) return false;
+  const qAll=norm(q).split(' ');
+  const qw=qAll.filter(w=>w.length>1||/^\d$/.test(w));
+  // «Add-On» после norm — два слова; для сверки с _DLC_WORDS склеиваем обратно
+  const dlc=s=>s.join(' ').replace(/\badd on\b/g,'addon').split(' ');
+  const mDlc=dlc(mw),qDlc=dlc(qAll);
+  if(_DLC_WORDS.some(w=>mDlc.includes(w)&&!qDlc.includes(w))) return false;
   return qw.length>0 && qw.every(w=>mw.includes(w));
 }
 async function _hdCoverUrl(title){
@@ -1787,7 +1794,8 @@ function openCollage(){
   let loaded=0;
   collageCovers.forEach((c,i)=>{if(c.img){loadImgEl(i,c.img,()=>{loaded++;renderCollageSlots();if(loaded===collageCovers.filter(x=>x.img).length)previewCollage();});}});
   // Фоновый апгрейд до HD: подменяем на крупную обложку, если IGDB её нашёл и слот не тронут вручную
-  collageCovers.forEach((c,i)=>{if(c.custom)return;const orig=c.img;_hdCoverUrl(c.title).then(hd=>{if(hd&&collageCovers[i]&&collageCovers[i].img===orig){collageCovers[i].img=hd;loadImgEl(i,hd,()=>{renderCollageSlots();previewCollage();});}});});
+  // Адрес слота меняем на HD только когда HD загрузился: не доехал — остаётся лёгкая обложка, а не пустой слот
+  collageCovers.forEach((c,i)=>{if(c.custom)return;const orig=c.img;_hdCoverUrl(c.title).then(hd=>{if(!hd)return;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{const hit=collageCovers.filter(x=>x.img===orig&&x.title===c.title);if(!hit.length)return;hit.forEach(x=>{x.img=hd;x.imgEl=img;});renderCollageSlots();previewCollage();};img.onerror=()=>_imgFail('collage_preview',hd,{slot:i,title:c.title,hd:true});img.src=hd;});});
   renderCollageSlots();resetCanvas();_selSlot=-1;
   document.getElementById('coll-mode-covers').style.background=_collageMode==='covers'?'var(--blue)':'transparent';
   document.getElementById('coll-mode-cards').style.background=_collageMode==='cards'?'var(--blue)':'transparent';
@@ -1868,9 +1876,10 @@ function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Mat
   jAgg('slotzoom'+i,'slot_transform',{slot:i,what:'zoom',title:collageCovers[i]?.title},undefined,+collageCovers[i].transform.scale.toFixed(2),1200);}
 function clearCover(i){jEvent('used',{feature:'clearCover',slot:i,title:collageCovers[i]?.title});collageCovers[i].img=null;collageCovers[i].imgEl=null;collageCovers[i].transform=null;if(_selSlot===i){_selSlot=-1;}_updateSlotBar();renderCollageSlots();resetCanvas();}
 function handleCDrop(i,e){const f=e.dataTransfer?.files?.[0];if(!f||!f.type.startsWith('image/')) return;const r=new FileReader();r.onload=ev=>{collageCovers[i].img=ev.target.result;collageCovers[i].transform={ox:0,oy:0,scale:1};loadImgEl(i,ev.target.result,()=>{renderCollageSlots();previewCollage();});};r.readAsDataURL(f);}
-// Загрузка устарела, если слот за это время сменил обложку (пикер, HD, файл) или коллаж открыли заново —
-// иначе поздно доехавшая картинка перетирает выбранную.
-function loadImgEl(i,src,cb){const c=collageCovers[i];const stale=()=>collageCovers[i]!==c||c.img!==src;const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{if(stale())return;c.imgEl=img;if(cb)cb();};img.onerror=()=>{if(stale())return;c.imgEl=null;_imgFail('collage_preview',src,{slot:i,title:c.title});if(cb)cb();};img.src=src;}
+// Картинка достаётся слотам, которые ждут именно её (x.img===src), а не слоту i: пока она грузилась,
+// слот могли сменить в пикере (поздняя не перетрёт выбранную) или переставить местами (swapSlots
+// пересобирает объекты). cb зовём всегда — на нём держится счётчик загрузок openCollage.
+function loadImgEl(i,src,cb){const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';const put=el=>{const hit=collageCovers.filter(x=>x.img===src);hit.forEach(x=>x.imgEl=el);return hit;};img.onload=()=>{put(img);if(cb)cb();};img.onerror=()=>{const hit=put(null);if(hit.length)_imgFail('collage_preview',src,{slot:i,title:hit[0].title});if(cb)cb();};img.src=src;}
 function getLayout(){return document.querySelector('input[name="layout"]:checked')?.value||'2-3';}
 function _updateLayoutRadios(n){
   const row=document.getElementById('coll-layout-row');if(!row) return;
@@ -2192,9 +2201,11 @@ function _renderCollageFull(cb){
 // синхронной отрисовки: пока они грузятся, превью живёт своей жизнью, и обложка, выбранная в пикере
 // во время экспорта, после него не откатывается.
 function _collExportImgs(){
-  const fresh=[];let _failed=0;
-  const tasks=collageCovers.map((c,i)=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{fresh[i]=img;resolve();};img.onerror=()=>{fresh[i]=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
-  const swap=draw=>{const keep=collageCovers.map(c=>c.imgEl);collageCovers.forEach((c,i)=>{if(i in fresh)c.imgEl=fresh[i];});try{draw();}finally{collageCovers.forEach((c,i)=>c.imgEl=keep[i]);}};
+  // Ключ — адрес обложки, а не номер слота: если во время перезагрузки слоты переставят местами
+  // или сменят обложку, свежая копия не уедет под чужое название (такой слот рисуется как в превью)
+  const fresh=new Map();let _failed=0;
+  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const src=c.img;const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{fresh.set(src,img);resolve();};img.onerror=()=>{fresh.set(src,null);_failed++;_imgFail('collage_export',src,{title:c.title});resolve();};img.src=src.startsWith('data:')?src:src+(src.includes('?')?'&':'?')+'_dl='+Date.now();}));
+  const swap=draw=>{const keep=collageCovers.map(c=>c.imgEl);collageCovers.forEach(c=>{if(fresh.has(c.img))c.imgEl=fresh.get(c.img);});try{draw();}finally{collageCovers.forEach((c,i)=>c.imgEl=keep[i]);}};
   return {tasks,swap,failed:()=>_failed};
 }
 function downloadCollage(){
@@ -3426,7 +3437,8 @@ function closeStory(){
   jFlush();
   document.getElementById('story-modal').classList.remove('open');}
 // Фоновый HD-апгрейд одного слота (один IGDB-запрос на игру, guard от повтора). Замыкаемся на объект g, а не на индекс — переживает reorder.
-function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{if(g.imgUrl!==hd)return;g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
+// imgUrl меняем на HD только после загрузки: не доехал — в слоте остаётся лёгкая обложка, а не пустота.
+function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(!hd||g.imgUrl!==orig)return;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{if(g.imgUrl!==orig)return;g.imgUrl=hd;g.imgEl=img;_stRedrawCurrent();};img.onerror=()=>_imgFail('story_preview',hd,{title:g.title,hd:true});img.src=hd;});}
 
 // ── IMAGE PICKER (story cover swap + коллаж) ───────────────────────────
 let _pickerSlot=-1;

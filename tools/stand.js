@@ -37,9 +37,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     if (r.method() === 'OPTIONS') return r.respond({ status: 204, headers: CORS });
     const pth = new URL(u).pathname;
     if (pth === '/igdb/cover') igdbCover.push(new URL(u).searchParams.get('name'));
-    // Обложка-заглушка с задержкой для проверок гонок: /stand-img/<цвет>?ms=<задержка>
+    // Обложка-заглушка с задержкой для проверок гонок: /stand-img/<цвет>?ms=<задержка>; цвет fail — 404
     if (pth.startsWith('/stand-img/')) {
       const c = pth.split('/')[2], ms = +new URL(u).searchParams.get('ms') || 0;
+      if (c === 'fail') return void setTimeout(() => r.respond({ status: 404, headers: CORS, contentType: 'text/plain', body: 'no' }).catch(() => {}), ms);
       return void setTimeout(() => r.respond({ status: 200, headers: CORS, contentType: 'image/svg+xml',
         body: `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400"><rect width="300" height="400" fill="${c}"/></svg>` }).catch(() => {}), ms);
     }
@@ -95,8 +96,11 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('_displayTitle: висячих хвостов по каталогу нет', dangling.length === 0, dangling.join(' | '));
   // HD из IGDB: low-ответ с дополнением (скин, пак, сезонный абонемент) — не наша игра; «EA Sports UFC 6» на «UFC 6» — наша
   const lm = await p.evaluate(() => [['Batman: Arkham Knight', 'Batman: Arkham Knight - Batman: Noel Skin'], ['UFC 6', 'EA Sports UFC 6'],
-    ['Crash Bandicoot N. Sane Trilogy', 'Crash Bandicoot N. Sane Trilogy'], ['DOOM Soundtrack', 'DOOM Soundtrack Vol. 1'], ['Fallout 4', 'Fallout 4: Season Pass']].map(([q, m]) => _lowMatchOk(q, m)));
-  ok('_lowMatchOk: дополнения не проходят, если их нет в запросе', lm.join() === 'false,true,true,true,false', lm.join());
+    ['Crash Bandicoot N. Sane Trilogy', 'Crash Bandicoot N. Sane Trilogy'], ['DOOM Soundtrack', 'DOOM Soundtrack Vol. 1'], ['Fallout 4', 'Fallout 4: Season Pass'], ['Game X', 'Game X Add-On: Y']].map(([q, m]) => _lowMatchOk(q, m)));
+  ok('_lowMatchOk: дополнения не проходят, если их нет в запросе', lm.join() === 'false,true,true,true,false,false', lm.join());
+  // ответ модели строкой — не описания по буквам
+  const abi = await p.evaluate(() => JSON.stringify([_aiByIndex('Отличная игра'), _aiByIndex(['a', 'b']), _aiByIndex(null)]));
+  ok('_aiByIndex: строка → пусто, массив → нумерация с 1', abi === '[{},{"1":"a","2":"b"},{}]', abi);
 
   // ── Сторис ─────────────────────────────────────────────────
   await p.evaluate(() => __sel(6)); await p.evaluate(() => openStory());
@@ -285,14 +289,19 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     window._hdCoverUrl = async () => __slowImg('red', 1500); _stG[0]._hdDone = false;
     _stUpgradeSlotHD(0); await __wait(100); _stPickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2000);
     const c = __col(_stG[0].imgEl);
+    // в2) HD найден, но не загрузился, а лёгкая обложка ещё ехала — слот не должен остаться пустым
+    window._hdCoverUrl = async () => __slowImg('fail', 0); _stG[0]._hdDone = false;
+    _stG[0].imgUrl = __slowImg('red', 800); _stG[0].imgEl = null; _stLoadImgs(); _stUpgradeSlotHD(0); await __wait(1400);
+    const c2 = __col(_stG[0].imgEl);
     // г) экспорт перезагружает обложки; выбор, сделанный во время экспорта, не откатывается
     _stG[0].imgUrl = __slowImg('red', 1500); _stG[0].imgEl = await __img(__slowImg('red', 0)); window.__dl = [];
     downloadStory(); await __wait(150); _stPickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2600);
     const d = __col(_stG[0].imgEl), dl = __dl.length;
     window._hdCoverUrl = hdBak;
     _stG.slice(0, 2).forEach((g, i) => Object.assign(g, { imgUrl: bak[i].u, imgEl: bak[i].e, _hdDone: bak[i].h })); _stRedrawCurrent();
-    return { a, b, c, d, dl };
+    return { a, b, c, c2, d, dl };
   });
+  ok('сторис: HD не загрузился — в слоте остаётся лёгкая обложка', sr.c2 === 'red', String(sr.c2));
   ok('гонка сторис: поздняя исходная обложка не перетирает выбранную', sr.a === 'blue', JSON.stringify(sr));
   ok('гонка пикера: обложка уходит в свой слот, а не в открытый позже', sr.b[0] === 'green' && sr.b[1] !== 'green', JSON.stringify(sr.b));
   ok('гонка сторис: поздний HD не перетирает выбранную обложку', sr.c === 'blue', String(sr.c));
@@ -385,9 +394,16 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     collageCovers[0].img = __slowImg('red', 1500); collageCovers[0].imgEl = await __img(__slowImg('red', 0)); window.__dl = [];
     downloadCollage(); await __wait(150); collagePickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2600);
     const b = __col(collageCovers[0].imgEl), dl = __dl.length;
-    Object.assign(collageCovers[0], { img: bak.img, imgEl: bak.el, transform: bak.t }); renderCollageSlots(); redrawPreview();
-    return { a, b, dl };
+    // в) обложку выбрали и сразу переставили слоты, пока она грузилась — она доезжает в новый слот
+    const bak1 = { img: collageCovers[1].img, el: collageCovers[1].imgEl, t: collageCovers[1].transform };
+    collagePickImg(0); _pickerApply(__slowImg('green', 800)); swapSlots(0, 1); await __wait(1400);
+    const c = [__col(collageCovers[0].imgEl), __col(collageCovers[1].imgEl)];
+    swapSlots(0, 1);
+    Object.assign(collageCovers[0], { img: bak.img, imgEl: bak.el, transform: bak.t });
+    Object.assign(collageCovers[1], { img: bak1.img, imgEl: bak1.el, transform: bak1.t }); renderCollageSlots(); redrawPreview();
+    return { a, b, c, dl };
   });
+  ok('коллаж: обложка, переставленная во время загрузки, доезжает в свой новый слот', cr.c[1] === 'green' && cr.c[0] !== 'green', JSON.stringify(cr.c));
   ok('гонка коллажа: поздняя обложка не перетирает выбранную', cr.a === 'blue', JSON.stringify(cr));
   ok('экспорт коллажа: выбор во время экспорта не откатывается', cr.b === 'blue' && cr.dl === 1, JSON.stringify(cr));
 
