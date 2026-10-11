@@ -1868,7 +1868,9 @@ function zoomSlot(i,d){initT(i);collageCovers[i].transform.scale=Math.max(.2,Mat
   jAgg('slotzoom'+i,'slot_transform',{slot:i,what:'zoom',title:collageCovers[i]?.title},undefined,+collageCovers[i].transform.scale.toFixed(2),1200);}
 function clearCover(i){jEvent('used',{feature:'clearCover',slot:i,title:collageCovers[i]?.title});collageCovers[i].img=null;collageCovers[i].imgEl=null;collageCovers[i].transform=null;if(_selSlot===i){_selSlot=-1;}_updateSlotBar();renderCollageSlots();resetCanvas();}
 function handleCDrop(i,e){const f=e.dataTransfer?.files?.[0];if(!f||!f.type.startsWith('image/')) return;const r=new FileReader();r.onload=ev=>{collageCovers[i].img=ev.target.result;collageCovers[i].transform={ox:0,oy:0,scale:1};loadImgEl(i,ev.target.result,()=>{renderCollageSlots();previewCollage();});};r.readAsDataURL(f);}
-function loadImgEl(i,src,cb){const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{collageCovers[i].imgEl=img;if(cb)cb();};img.onerror=()=>{collageCovers[i].imgEl=null;_imgFail('collage_preview',src,{slot:i,title:collageCovers[i]?.title});if(cb)cb();};img.src=src;}
+// Загрузка устарела, если слот за это время сменил обложку (пикер, HD, файл) или коллаж открыли заново —
+// иначе поздно доехавшая картинка перетирает выбранную.
+function loadImgEl(i,src,cb){const c=collageCovers[i];const stale=()=>collageCovers[i]!==c||c.img!==src;const img=new Image();if(!src.startsWith('data:'))img.crossOrigin='anonymous';img.onload=()=>{if(stale())return;c.imgEl=img;if(cb)cb();};img.onerror=()=>{if(stale())return;c.imgEl=null;_imgFail('collage_preview',src,{slot:i,title:c.title});if(cb)cb();};img.src=src;}
 function getLayout(){return document.querySelector('input[name="layout"]:checked')?.value||'2-3';}
 function _updateLayoutRadios(n){
   const row=document.getElementById('coll-layout-row');if(!row) return;
@@ -2181,10 +2183,19 @@ function rr(ctx,x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y)
 function _renderCollageFull(cb){
   const gapEl=document.getElementById('coll-gap');if(gapEl)_collageGap=+gapEl.value;
   document.fonts.ready.then(()=>{
-  const lay=getLayout();const{cells,W,H}=getCells(lay,collageCovers.length,2);const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
-  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
-  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;_collRedrawAt(off,2);_collageLayout=prevLayout;_previewCells=prevCells;collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();cb(off,_failed);});
+  const lay=getLayout();const{cells,W,H}=getCells(lay,collageCovers.length,2);
+  const{tasks,swap,failed}=_collExportImgs();
+  Promise.all(tasks).then(()=>{const off=document.createElement('canvas');off.width=W;off.height=H;const prevLayout=_collageLayout;const prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;swap(()=>_collRedrawAt(off,2));_collageLayout=prevLayout;_previewCells=prevCells;redrawPreview();cb(off,failed());});
   });
+}
+// Экспорт перегружает обложки без кеша в свои картинки и подставляет их в слоты только на время
+// синхронной отрисовки: пока они грузятся, превью живёт своей жизнью, и обложка, выбранная в пикере
+// во время экспорта, после него не откатывается.
+function _collExportImgs(){
+  const fresh=[];let _failed=0;
+  const tasks=collageCovers.map((c,i)=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{fresh[i]=img;resolve();};img.onerror=()=>{fresh[i]=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
+  const swap=draw=>{const keep=collageCovers.map(c=>c.imgEl);collageCovers.forEach((c,i)=>{if(i in fresh)c.imgEl=fresh[i];});try{draw();}finally{collageCovers.forEach((c,i)=>c.imgEl=keep[i]);}};
+  return {tasks,swap,failed:()=>_failed};
 }
 function downloadCollage(){
   showToast('Подготовка...');
@@ -2244,12 +2255,12 @@ function downloadCollageFormat(fmt){
   } else {
     lay=getLayout();({cells,W,H}=getCells(lay,collageCovers.length,2));
   }
-  const origImgs=collageCovers.map(c=>c.imgEl);let _failed=0;
-  const tasks=collageCovers.map(c=>new Promise(resolve=>{if(!c.img){resolve();return;}const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{c.imgEl=img;resolve();};img.onerror=()=>{c.imgEl=null;_failed++;_imgFail('collage_export',c.img,{title:c.title});resolve();};img.src=c.img.startsWith('data:')?c.img:c.img+(c.img.includes('?')?'&':'?')+'_dl='+Date.now();}));
+  const{tasks,swap,failed}=_collExportImgs();
   Promise.all(tasks).then(()=>{
+    const _failed=failed();
     const src=document.createElement('canvas');src.width=W;src.height=H;
-    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;_collRedrawAt(src,2,true);_collageLayout=prevLayout;_previewCells=prevCells;
-    collageCovers.forEach((c,i)=>c.imgEl=origImgs[i]);redrawPreview();
+    const prevLayout=_collageLayout,prevCells=_previewCells;_collageLayout=lay;_previewCells=cells;swap(()=>_collRedrawAt(src,2,true));_collageLayout=prevLayout;_previewCells=prevCells;
+    redrawPreview();
     const out=document.createElement('canvas');out.width=f.w;out.height=f.h;const octx=out.getContext('2d');
     _drawCollageBg(octx,f.w,f.h);
     const fit=Math.min(f.w/W,f.h/H),dw=W*fit,dh=H*fit,dx=(f.w-dw)/2,dy=(f.h-dh)/2;
@@ -3415,7 +3426,7 @@ function closeStory(){
   jFlush();
   document.getElementById('story-modal').classList.remove('open');}
 // Фоновый HD-апгрейд одного слота (один IGDB-запрос на игру, guard от повтора). Замыкаемся на объект g, а не на индекс — переживает reorder.
-function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
+function _stUpgradeSlotHD(i){const g=_stG[i];if(!g||g._hdDone||g.custom)return;g._hdDone=true;const orig=g.imgUrl;_hdCoverUrl(g.title).then(hd=>{if(hd&&g.imgUrl===orig){g.imgUrl=hd;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{if(g.imgUrl!==hd)return;g.imgEl=img;_stRedrawCurrent();};img.src=hd;}});}
 
 // ── IMAGE PICKER (story cover swap + коллаж) ───────────────────────────
 let _pickerSlot=-1;
@@ -3467,12 +3478,14 @@ function _pickerApply(url){
     _closePicker();
     return;
   }
-  if(!_stG[_pickerSlot]) return;
-  _stG[_pickerSlot]._replaced=true;
-  _stG[_pickerSlot].imgUrl=url;
+  // Слот берём сейчас, а не в onload: пока картинка грузится, пикер могут открыть для другого слота
+  const g=_stG[_pickerSlot];
+  if(!g) return;
+  g._replaced=true;
+  g.imgUrl=url;
   const img=new Image();img.crossOrigin='anonymous';
-  img.onload=()=>{_stG[_pickerSlot].imgEl=img;_stBuildGameList();_stRedrawCurrent();};
-  img.onerror=()=>{_stG[_pickerSlot].imgEl=null;_stBuildGameList();_stRedrawCurrent();};
+  img.onload=()=>{if(g.imgUrl!==url)return;g.imgEl=img;_stBuildGameList();_stRedrawCurrent();};
+  img.onerror=()=>{if(g.imgUrl!==url)return;g.imgEl=null;_stBuildGameList();_stRedrawCurrent();};
   img.src=url;
   _closePicker();
 }
@@ -3534,7 +3547,9 @@ async function _pickerIgdbSearch(){
 }
 
 function _stInitCanvas(){_stCanvas.width=720;_stCanvas.height=1280;}
-function _stLoadImgs(){_stG.forEach(g=>{if(!g.imgUrl) return;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;_stRedrawCurrent();};img.onerror=()=>{g.imgEl=null;_imgFail('story_preview',g.imgUrl,{title:g.title});_stRedrawCurrent();};img.src=g.imgUrl;});_stRedrawCurrent();}
+// Каждая загрузка обложки сторис пишет imgEl, только если слот всё ещё ждёт именно её (g.imgUrl===url):
+// пока грузилась исходная или HD, человек мог выбрать в пикере другую — поздняя её не перетирает.
+function _stLoadImgs(){_stG.forEach(g=>{if(!g.imgUrl) return;const url=g.imgUrl;const img=new Image();img.crossOrigin='anonymous';img.onload=()=>{if(g.imgUrl!==url)return;g.imgEl=img;_stRedrawCurrent();};img.onerror=()=>{if(g.imgUrl!==url)return;g.imgEl=null;_imgFail('story_preview',url,{title:g.title});_stRedrawCurrent();};img.src=url;});_stRedrawCurrent();}
 function _stRedrawCurrent(){if(_stMode==='templates')_stRenderTemplate();else _stRender();}
 function _stRender(){
   if(!_stCtx) return;const ctx=_stCtx;const cw=_stCanvas.width,ch=_stCanvas.height;
@@ -3893,19 +3908,25 @@ function _stTplNeon(){
 function downloadStory(){
   showToast('Подготовка...');
   document.fonts.ready.then(()=>{
-  const origG=_stG.map(g=>g.imgEl);const origEls=_stEls.map(el=>el.imgEl);const tasks=[];let _failed=0;const _shownN=Math.min(_stGameCount,3);
-  _stG.forEach((g,idx)=>tasks.push(new Promise(resolve=>{if(!g.imgUrl){resolve();return;}const img=new Image();const isData=g.imgUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{g.imgEl=img;resolve();};img.onerror=()=>{g.imgEl=null;if(idx<_shownN)_failed++;_imgFail('story_export',g.imgUrl,{title:g.title});resolve();};img.src=isData?g.imgUrl:g.imgUrl+(g.imgUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
-  if(_stMode==='editor')_stEls.filter(el=>(el.type==='logo'||el.type==='qr')&&el.logoUrl).forEach(el=>tasks.push(new Promise(resolve=>{const img=new Image();const isData=el.logoUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{el.imgEl=img;resolve();};img.onerror=()=>{el.imgEl=null;resolve();};img.src=isData?el.logoUrl:el.logoUrl+(el.logoUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
+  // Свежие копии обложек и логотипов грузятся в свои Map и подставляются только на время синхронной
+  // отрисовки (как _collExportImgs у коллажа): выбор в пикере во время экспорта не откатывается.
+  const freshG=new Map(),freshEls=new Map();const tasks=[];let _failed=0;const _shownN=Math.min(_stGameCount,3);
+  _stG.forEach((g,idx)=>tasks.push(new Promise(resolve=>{if(!g.imgUrl){resolve();return;}const img=new Image();const isData=g.imgUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{freshG.set(g,img);resolve();};img.onerror=()=>{freshG.set(g,null);if(idx<_shownN)_failed++;_imgFail('story_export',g.imgUrl,{title:g.title});resolve();};img.src=isData?g.imgUrl:g.imgUrl+(g.imgUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
+  if(_stMode==='editor')_stEls.filter(el=>(el.type==='logo'||el.type==='qr')&&el.logoUrl).forEach(el=>tasks.push(new Promise(resolve=>{const img=new Image();const isData=el.logoUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{freshEls.set(el,img);resolve();};img.onerror=()=>{freshEls.set(el,null);resolve();};img.src=isData?el.logoUrl:el.logoUrl+(el.logoUrl.includes('?')?'&':'?')+'_st='+Date.now();})));
   else if(_stLogoUrl&&_stLogoPos!=='none')tasks.push(new Promise(resolve=>{const img=new Image();const isData=_stLogoUrl.startsWith('data:');if(!isData)img.crossOrigin='anonymous';img.onload=()=>{_stLogoImg=img;resolve();};img.onerror=resolve;img.src=isData?_stLogoUrl:_stLogoUrl+((_stLogoUrl.includes('?')?'&':'?')+'_st='+Date.now());}));
   // QR-коды шаблона: без предзагрузки в PNG уедет сторис без кода (ленивая загрузка не успеет)
   if(_stMode==='templates')tasks.push(_stQrEnsure(_stG.slice(0,_shownN)));
   Promise.all(tasks).then(()=>{
     const off=document.createElement('canvas');off.width=STORY_W;off.height=STORY_H;
     const prevCanvas=_stCanvas,prevCtx=_stCtx,prevSel=_stSel;
+    const keepG=_stG.map(g=>g.imgEl),keepEls=_stEls.map(el=>el.imgEl);
     _stCanvas=off;_stCtx=off.getContext('2d');_stSel=-1;
-    if(_stMode==='templates')_stRenderTemplate();else _stRender();
-    _stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel;
-    _stG.forEach((g,i)=>g.imgEl=origG[i]);_stEls.forEach((el,i)=>el.imgEl=origEls[i]);
+    _stG.forEach(g=>{if(freshG.has(g))g.imgEl=freshG.get(g);});_stEls.forEach(el=>{if(freshEls.has(el))el.imgEl=freshEls.get(el);});
+    try{ if(_stMode==='templates')_stRenderTemplate();else _stRender(); }
+    finally{
+      _stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel;
+      _stG.forEach((g,i)=>g.imgEl=keepG[i]);_stEls.forEach((el,i)=>el.imgEl=keepEls[i]);
+    }
     _stRedrawCurrent();
     try{
       const a=document.createElement('a');a.href=off.toDataURL('image/png');a.download='story.png';a.click();
@@ -3956,11 +3977,13 @@ async function downloadStoryBatch(){
   const btn=document.getElementById('st-batch-btn');
   if(btn)btn.disabled=true;
   showToast(`Готовлю ${list.length} сторис...`);
-  await document.fonts.ready;
-  const prevG=_stG,prevCount=_stGameCount,prevCanvas=_stCanvas,prevCtx=_stCtx,prevSel=_stSel;
-  const off=document.createElement('canvas');off.width=STORY_W;off.height=STORY_H;
-  _stCanvas=off;_stCtx=off.getContext('2d');_stSel=-1;
+  // Батч длится десятки секунд (IGDB, обложки, QR), а окно сторис всё это время живое. Поэтому общее
+  // состояние (_stG, канвас) подменяем только на время синхронной отрисовки одной сторис и сразу
+  // возвращаем — превью и заново открытая сторис батчу не мешают, сбой рендера не оставляет мёртвое окно.
+  const off=document.createElement('canvas');off.width=STORY_W;off.height=STORY_H;const offCtx=off.getContext('2d');
   let ok=0,fail=0,qrMiss=0;
+  try{
+  await document.fonts.ready;
   for(const g of list){
     const entry={id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
     // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком.
@@ -3979,22 +4002,23 @@ async function downloadStoryBatch(){
       };
       tryLoad(primary,iconUrl);
     });
-    _stG=[entry];_stGameCount=1;
     await _stQrEnsure([entry]); // код должен быть в кэше ДО рендера в offscreen-канвас
     qrMiss+=_stQrMissing([entry]);
-    _stRenderTemplate();
     try{
+      const prevG=_stG,prevCount=_stGameCount,prevCanvas=_stCanvas,prevCtx=_stCtx,prevSel=_stSel;
+      _stG=[entry];_stGameCount=1;_stCanvas=off;_stCtx=offCtx;_stSel=-1;
+      try{ _stRenderTemplate(); }
+      finally{ _stG=prevG;_stGameCount=prevCount;_stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel; }
       const a=document.createElement('a');
       a.href=off.toDataURL('image/png');
       a.download='story-'+_slugify(entry.title)+'.png';
       a.click();
       ok++;
-    }catch(err){fail++;}
+    }catch(err){fail++;jError('story_batch',err.message,{title:entry.title});}
     await new Promise(r=>setTimeout(r,400)); // не блокировать браузер частыми автозагрузками
   }
-  _stG=prevG;_stGameCount=prevCount;_stCanvas=prevCanvas;_stCtx=prevCtx;_stSel=prevSel;
+  }finally{ if(btn)btn.disabled=false; }
   _stRedrawCurrent();
-  if(btn)btn.disabled=false;
   _jExported=true;
   // Одно событие на весь батч, а не по событию на игру: цикл по 15 играм — ровно
   // тот случай, из-за которого ~/catalog-journal раздулся до 17 тыс. строк.

@@ -80,6 +80,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     window.__toast = () => document.getElementById('toast').textContent;
     window.__sel = n => { games.forEach(g => g._sel = false); const pick = games.filter(g => g.priceRUB && g.description).slice(0, n); pick.forEach(g => g._sel = true); return pick.map(g => g.title); };
     window.__img = async href => { const im = new Image(); im.src = href; await im.decode(); return im; };
+    // n — каждый раз новый адрес: из кэша картинка приехала бы сразу, и гонки бы не было
+    let n = 0; window.__slowImg = (c, ms) => `https://api.poigraem.shop/stand-img/${c}?ms=${ms}&n=${++n}`;
+    window.__col = im => ((im && im.src || '').match(/stand-img\/(\w+)/) || [])[1] || null; // цвет заглушки в imgEl
+    window.__wait = ms => new Promise(r => setTimeout(r, ms));
   });
   const shot = async (id, name) => { const b64 = await p.evaluate(id => document.getElementById(id).toDataURL('image/png').split(',')[1], id); fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(b64, 'base64')); };
   const saveDl = async name => { const b64 = await p.evaluate(() => __dl[0] && __dl[0].href.split(',')[1]); if (b64) fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(b64, 'base64')); };
@@ -268,6 +272,32 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   });
   ok('Б-3 пикер: обложка с апострофом в URL ставится кликом', pk.n === 1 && pk.applied && pk.open === 'none', JSON.stringify(pk));
 
+  // Гонки загрузки обложек в сторис: поздно доехавшая картинка не перетирает выбранную позже
+  const sr = await p.evaluate(async () => {
+    const bak = _stG.slice(0, 2).map(g => ({ u: g.imgUrl, e: g.imgEl, h: g._hdDone })), hdBak = window._hdCoverUrl;
+    // а) исходная обложка грузится долго, человек за это время выбрал другую
+    _stG[0].imgUrl = __slowImg('red', 1500); _stLoadImgs(); _stPickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2200);
+    const a = __col(_stG[0].imgEl);
+    // б) выбранная в пикере грузится долго, а человек уже открыл пикер другого слота
+    _stPickImg(0); _pickerApply(__slowImg('green', 1000)); _stPickImg(1); await __wait(1600); _closePicker();
+    const b = [__col(_stG[0].imgEl), __col(_stG[1].imgEl)];
+    // в) HD из IGDB найден и грузится долго, человек выбрал свою обложку
+    window._hdCoverUrl = async () => __slowImg('red', 1500); _stG[0]._hdDone = false;
+    _stUpgradeSlotHD(0); await __wait(100); _stPickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2000);
+    const c = __col(_stG[0].imgEl);
+    // г) экспорт перезагружает обложки; выбор, сделанный во время экспорта, не откатывается
+    _stG[0].imgUrl = __slowImg('red', 1500); _stG[0].imgEl = await __img(__slowImg('red', 0)); window.__dl = [];
+    downloadStory(); await __wait(150); _stPickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2600);
+    const d = __col(_stG[0].imgEl), dl = __dl.length;
+    window._hdCoverUrl = hdBak;
+    _stG.slice(0, 2).forEach((g, i) => Object.assign(g, { imgUrl: bak[i].u, imgEl: bak[i].e, _hdDone: bak[i].h })); _stRedrawCurrent();
+    return { a, b, c, d, dl };
+  });
+  ok('гонка сторис: поздняя исходная обложка не перетирает выбранную', sr.a === 'blue', JSON.stringify(sr));
+  ok('гонка пикера: обложка уходит в свой слот, а не в открытый позже', sr.b[0] === 'green' && sr.b[1] !== 'green', JSON.stringify(sr.b));
+  ok('гонка сторис: поздний HD не перетирает выбранную обложку', sr.c === 'blue', String(sr.c));
+  ok('экспорт сторис: выбор во время экспорта не откатывается', sr.d === 'blue' && sr.dl === 1, JSON.stringify(sr));
+
   // Батч: сторис на каждую выбранную игру, по файлу на игру; после батча кадр пользователя на месте
   const bt = await p.evaluate(async () => {
     const before = { g: _stG, n: _stGameCount }; const sel = __sel(3); window.__dl = [];
@@ -278,6 +308,29 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('батч-сторис: по PNG 1080×1920 на игру, имена по играм, кадр восстановлен',
     bt.files.length === 3 && bt.files.every((f, i) => f.w === 1080 && f.h === 1920 && f.name === bt.want[i]) && bt.distinct === 3 && bt.restored, JSON.stringify(bt));
   await saveDl('export-story-batch-1');
+
+  // Батч идёт десятки секунд: окно сторис живёт своей жизнью — превью на месте, заново открытая сторис не затирается,
+  // сбой рендера одной сторис не оставляет мёртвое превью и выключенную кнопку
+  const bt2 = await p.evaluate(async () => {
+    const el = document.getElementById('st-canvas'); __sel(2); window.__dl = [];
+    const run = downloadStoryBatch(); await __wait(300);
+    const mid = _stCanvas === el, fresh = _stG.slice(); _stG = fresh; // как будто сторис открыли заново
+    await run; const keptNew = _stG === fresh;
+    const orig = _stRenderTemplate; let n = 0;
+    window._stRenderTemplate = function () { if (_stCanvas !== el && n++ === 0) throw new Error('stand'); return orig.apply(this, arguments); };
+    let thrown = null; try { await downloadStoryBatch(); } catch (e) { thrown = e.message; }
+    window._stRenderTemplate = orig;
+    return { mid, keptNew, thrown, canvasBack: _stCanvas === el, btn: !document.getElementById('st-batch-btn').disabled, files: __dl.length };
+  });
+  ok('батч-сторис: превью и заново открытая сторис живы, сбой рендера не ломает окно',
+    bt2.mid && bt2.keptNew && bt2.canvasBack && bt2.btn, JSON.stringify(bt2));
+  await p.evaluate(() => _stRedrawCurrent());
+
+  // Esc при открытом пикере обложек закрывает пикер, а не окно под ним
+  await p.evaluate(() => _stPickImg(0)); await p.keyboard.press('Escape');
+  const escP = await p.evaluate(() => ({ picker: document.getElementById('cc-img-picker').style.display, story: document.getElementById('story-modal').classList.contains('open') }));
+  ok('Esc при открытом пикере закрывает пикер, сторис остаётся', escP.picker === 'none' && escP.story, JSON.stringify(escP));
+  await p.evaluate(() => { _closePicker(); document.getElementById('story-modal').classList.add('open'); });
 
   // Горячие клавиши редактора (UX-15): Delete, Ctrl+Z, Ctrl+Y; в поле ввода Delete элементы не трогает; Esc закрывает окно
   await p.evaluate(() => { _stSetMode('editor'); _stEls = []; _stUndoStack = []; _stRedoStack = []; stAddSticker(); _stSel = _stEls.length - 1; document.activeElement && document.activeElement.blur(); });
@@ -322,6 +375,22 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     const r = await p.evaluate(async f => { const d = __dl[0]; if (!d) return null; const im = await __img(d.href); return { w: im.naturalWidth, h: im.naturalHeight, want: [_COLLAGE_FORMATS[f].w, _COLLAGE_FORMATS[f].h] }; }, fmt);
     ok(`экспорт коллажа ${fmt}`, r && r.w === r.want[0] && r.h === r.want[1], JSON.stringify(r)); await saveDl(`export-collage-${fmt}`);
   }
+  // Гонки загрузки обложек в коллаже — как у сторис
+  const cr = await p.evaluate(async () => {
+    const c0 = collageCovers[0], bak = { img: c0.img, el: c0.imgEl, t: c0.transform };
+    // а) исходная или HD грузится долго, человек выбрал обложку в пикере
+    c0.img = __slowImg('red', 1500); loadImgEl(0, c0.img); collagePickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2200);
+    const a = __col(collageCovers[0].imgEl);
+    // б) экспорт перезагружает обложки; выбор во время экспорта не откатывается
+    collageCovers[0].img = __slowImg('red', 1500); collageCovers[0].imgEl = await __img(__slowImg('red', 0)); window.__dl = [];
+    downloadCollage(); await __wait(150); collagePickImg(0); _pickerApply(__slowImg('blue', 0)); await __wait(2600);
+    const b = __col(collageCovers[0].imgEl), dl = __dl.length;
+    Object.assign(collageCovers[0], { img: bak.img, imgEl: bak.el, transform: bak.t }); renderCollageSlots(); redrawPreview();
+    return { a, b, dl };
+  });
+  ok('гонка коллажа: поздняя обложка не перетирает выбранную', cr.a === 'blue', JSON.stringify(cr));
+  ok('экспорт коллажа: выбор во время экспорта не откатывается', cr.b === 'blue' && cr.dl === 1, JSON.stringify(cr));
+
   await p.keyboard.press('Escape');
   ok('горячие клавиши: Esc закрывает коллаж', await p.evaluate(() => !document.getElementById('coll-modal').classList.contains('open')));
   await p.evaluate(() => { if (document.getElementById('coll-modal').classList.contains('open')) closeCollage(); });
