@@ -2605,7 +2605,9 @@ function _stRelinkSlots(){
     if(el.type!=='qr'||!swap[el.gameUrl]) return;
     el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
   });
-  const re=s=>Object.entries(swap).reduce((t,[a,b])=>t.split(a).join(b),s||'');
+  // Одним проходом: при последовательной замене новый адрес одного слота мог совпасть со старым другого и заменился бы дважды
+  const rx=new RegExp(Object.keys(swap).sort((a,b)=>b.length-a.length).map(a=>a.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|'),'g');
+  const re=s=>(s||'').replace(rx,m=>swap[m]);
   _stCapText=re(_stCapText); _stCapBot=re(_stCapBot);
   const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
   jEvent('used',{feature:'storyRelink',n:Object.keys(swap).length});
