@@ -22,6 +22,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const posted = {};
 const claudeQ = [];   // ответы-заглушки Claude по очереди (текст модели); очередь пуста — 500
 const igdbCover = []; // какие названия приложение искало в IGDB за HD-обложкой
+let tgPostFail = false; // /api/tg-post отвечает как упавший nginx: 502 и HTML вместо JSON
 
 const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); fs.createReadStream(SRC).pipe(s); }).listen(PORT);
 
@@ -36,6 +37,16 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     if (r.method() === 'OPTIONS') return r.respond({ status: 204, headers: CORS });
     const pth = new URL(u).pathname;
     if (pth === '/igdb/cover') igdbCover.push(new URL(u).searchParams.get('name'));
+    // Обложка-заглушка с задержкой для проверок гонок: /stand-img/<цвет>?ms=<задержка>
+    if (pth.startsWith('/stand-img/')) {
+      const c = pth.split('/')[2], ms = +new URL(u).searchParams.get('ms') || 0;
+      return void setTimeout(() => r.respond({ status: 200, headers: CORS, contentType: 'image/svg+xml',
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400"><rect width="300" height="400" fill="${c}"/></svg>` }).catch(() => {}), ms);
+    }
+    if (pth === '/api/tg-post' && tgPostFail) {
+      (posted[pth] = posted[pth] || []).push(r.postData() || '');
+      return r.respond({ status: 502, headers: CORS, contentType: 'text/html', body: '<html><body>502 Bad Gateway</body></html>' });
+    }
     if (/^\/(api\/(claude|tg-post|cc-queue)|cc\/journal)/.test(pth)) {
       (posted[pth] = posted[pth] || []).push(r.postData() || '');
       // Claude сломан нарочно: пост обязан собираться из описаний снапшота и без него.
@@ -223,6 +234,20 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   await p.evaluate(() => _stGenCaption());
   const cap = await p.evaluate(() => { const b = _stCapText.split('\n\n'); return b.length === 3 ? b.map((s, i) => s.includes(_stG[i].title) && s.includes('ПОДРОБНО-' + (i + 1))) : [_stCapText]; });
   ok('Б-1 сторис: текст к сторис — описание под своей игрой', cap.length === 3 && cap.every(x => x === true), JSON.stringify(cap));
+  // Потери и странные ответы модели в сторис: честный «⚠️ без описания», массив вместо объекта, объект вместо строки
+  claudeQ.push(JSON.stringify({ 1: 'КОРОТКО-1' }));
+  await p.evaluate(() => { _stShortDescs = {}; return _stGenShortDescs(); });
+  const sd7 = await p.evaluate(() => __toast());
+  ok('сторис: потеряны короткие описания → «⚠️ … без описания: 2»', /⚠️.*без описания: 2/.test(sd7), sd7);
+  claudeQ.push(JSON.stringify(['МАССИВ-1', 'МАССИВ-2', 'МАССИВ-3']));
+  const sd9 = await p.evaluate(async () => { _stShortDescs = {}; await _stGenShortDescs(); return _stG.slice(0, 3).map(g => _stShortDescs[g.title] || null); });
+  ok('сторис: ответ массивом раскладывается по играм без сдвига', sd9.join() === 'МАССИВ-1,МАССИВ-2,МАССИВ-3', JSON.stringify(sd9));
+  claudeQ.push('Вот описания: не JSON');
+  const cp7 = await p.evaluate(async () => { await _stGenCaption(); return __toast(); });
+  ok('текст к сторис: битый JSON → «⚠️ … без описания: 3»', /⚠️.*без описания: 3/.test(cp7), cp7);
+  claudeQ.push(JSON.stringify({ 1: { text: 'объект' }, 2: 'ПОДРОБНО-2', 3: 'ПОДРОБНО-3' }));
+  const cp8 = await p.evaluate(async () => { await _stGenCaption(); return { obj: _stCapText.includes('[object Object]'), toast: __toast() }; });
+  ok('текст к сторис: объект вместо строки не уходит как [object Object]', !cp8.obj && /без описания: 1/.test(cp8.toast), JSON.stringify(cp8));
   await p.evaluate(() => { _stG.forEach((g, i) => g.description = __stDescBak[i]); _stShortDescs = {}; _stCapText = ''; _stRenderTemplate(); });
 
   // Б-3: URL обложки с апострофом не ломает клик в пикере (раньше URL жил в onclick-атрибуте)
@@ -335,6 +360,23 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   }
   ok('📤 в канал: тост об успехе', /Пост отправлен в канал/.test(await p.evaluate(() => __toast())), await p.evaluate(() => __toast()));
 
+  // Лимит Telegram — по видимому тексту: адреса ссылок в 1024 подписи не входят (как у «🕐 В очередь бота»)
+  const lim = await p.evaluate(() => {
+    const box = document.getElementById('out-text'), bak = { html: box.innerHTML, img: _ccPostImg };
+    _ccPostImg = 'data:image/jpeg;base64,AAAA';
+    box.innerHTML = Array.from({ length: 10 }, (_, i) => `<a href="https://poigraem.shop/?game=1234567890123456${i}">Игра номер ${i}</a> ` + 'о'.repeat(70)).join('<br>');
+    _updateOutCount(); const cnt = document.getElementById('out-count').textContent, vis = _outSerialize('visible').length, md = _outSerialize('md').length;
+    _tgDisarmSend(); sendPostToTG(); const armed = _tgSendArmed; _tgDisarmSend();
+    box.innerHTML = bak.html; _ccPostImg = bak.img; _updateOutCount();
+    return { vis, md, cnt, armed };
+  });
+  ok('лимит TG: считается видимый текст, адреса ссылок не в счёт', lim.vis <= 1024 && lim.md > 1024 && lim.armed && lim.cnt.startsWith(lim.vis.toLocaleString('ru') + ' /'), JSON.stringify(lim));
+  // 502 от nginx с HTML вместо JSON — в тосте код ответа, а не «Unexpected token»
+  tgPostFail = true;
+  await p.evaluate(() => { _tgDisarmSend(); sendPostToTG(); sendPostToTG(); }); await sleep(1500); tgPostFail = false;
+  const t502 = await p.evaluate(() => __toast());
+  ok('📤 в канал: HTML-ответ 502 → в тосте HTTP 502', /HTTP 502/.test(t502), t502);
+
   // ── Б-1/Б-2: описания от модели в посте ───────────────────
   // Ключи-индексы вразнобой → описание под своей игрой; потерянные ключи и битый JSON — честный «⚠️ без описания: N»
   const aiPost = async reply => {
@@ -354,6 +396,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('Б-2 пост: потеряны ключи → «⚠️ … 2 игр без описания»', /⚠️ Пост готов, но 2 игр без описания/.test(a2.toast) && /без описания: 2/.test(a2.status), JSON.stringify(a2));
   const a3 = await aiPost('Вот описания: не JSON');
   ok('Б-2 пост: битый JSON → «⚠️ … 3 игр без описания»', /⚠️ Пост готов, но 3 игр без описания/.test(a3.toast), JSON.stringify(a3));
+  const a4 = await aiPost(JSON.stringify(['ОПИС-1', 'ОПИС-2', 'ОПИС-3']));
+  ok('пост: ответ модели массивом раскладывается по играм без сдвига', a4.mapped && /✅ Пост готов \(3 игр\)/.test(a4.toast), JSON.stringify(a4));
   ok('Б-1 пост: заглушка Claude израсходована', claudeQ.length === 0, claudeQ.length + ' в очереди');
   await p.keyboard.press('Escape');
   ok('горячие клавиши: Esc закрывает пост', await p.evaluate(() => !document.getElementById('tg-modal').classList.contains('open')));
