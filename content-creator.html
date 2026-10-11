@@ -88,6 +88,7 @@
     td.td-price { font-size: 13px; font-weight: 600; color: var(--accent); width: 90px; white-space: nowrap; }
     td.td-disc { width: 50px; }
     .disc-badge { display: inline-block; background: rgba(192,57,43,.2); color: #e74c3c; border-radius: 4px; padding: 1px 5px; font-size: 11px; font-weight: 700; }
+    .plat-badge { display: inline-block; background: rgba(0,112,209,.18); color: var(--blue); border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 700; margin-left: 6px; vertical-align: 1px; white-space: nowrap; }
     td.td-desc { width: 34px; text-align: center; font-size: 12px; }
     .desc-yes { color: var(--green); }
     .desc-no { color: var(--muted); opacity: .5; }
@@ -306,6 +307,9 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);cursor:pointer">
           <input type="checkbox" id="coll-card-hide-title" onchange="redrawPreview()" style="accent-color:var(--blue)"> Без названия
         </label>
+        <label title="PS4/PS5 рядом с названием — только у игр, которые есть в каталоге под двумя платформами. Выключи, если в карточке тесно" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);cursor:pointer">
+          <input type="checkbox" id="coll-plat-on" checked onchange="_collSetPlat(this.checked)" style="accent-color:var(--blue)"> Платформа на картинке
+        </label>
       </div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center">
         <div style="font-size:10px;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Предпросмотр · Перетаскивай мышью · Колёсико = масштаб</div>
@@ -397,6 +401,7 @@
             <button id="st-neon" onclick="_stSetNeon(!_stNeonOn)" title="Светящийся контур вокруг каждой обложки. В шаблоне «Неон» свечение встроено — там меняется только цвет" style="padding:5px 12px;border-radius:5px;border:1px solid var(--border);background:var(--card);color:var(--muted);font-size:11px;cursor:pointer;font-family:'Oswald',sans-serif;transition:.2s">Выкл</button>
             <input type="color" id="st-neon-color" title="Цвет неона (и свечения шаблона «Неон»)" oninput="_stSetNeonColor(this.value)" style="width:28px;height:24px;padding:0;border:none;cursor:pointer;background:none">
           </div>
+          <label title="PS4/PS5 рядом с названием — только у игр, которые есть в каталоге под двумя платформами. Выключи, если не влезает" style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-top:6px"><input type="checkbox" id="st-plat-on" checked onchange="_stSetPlat(this.checked)"> Платформа на картинке</label>
         </div>
         <!-- Logo URL -->
         <div>
@@ -1061,7 +1066,7 @@ function renderTable() {
         <input type="checkbox" ${g._sel ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleGame(${gi})">
       </td>
       <td class="td-thumb">${thumb}</td>
-      <td class="td-title">${esc(_displayTitle(g.title))}</td>
+      <td class="td-title">${esc(_displayTitle(g.title))}${g._platform ? `<span class="plat-badge">${esc(g._platform)}</span>` : ''}</td>
       <td class="td-store">${g._custom ? `<button onclick="event.stopPropagation();removeCustomItem(${g._cid})" title="Удалить свой товар" style="background:none;border:none;cursor:pointer;font-size:12px">🗑</button>` : esc(g.store || '')}</td>
       <td class="td-price">${price}</td>
       <td class="td-disc">${disc}</td>
@@ -1353,7 +1358,7 @@ async function generateAIPost(opts = {}) {
       for (let ci = 0; ci < chunks.length; ci++) {
         const chunk = chunks[ci];
         status.textContent = `Генерирую описания: пакет ${ci + 1}/${chunks.length} (${chunk.length} игр)...`;
-        const prompt = _descPrompt(chunk.map(g => ({ title: _displayTitle(g.title),
+        const prompt = _descPrompt(chunk.map(g => ({ title: _pubTitle(g),
           facts: rewrite ? g.description || '' : '', avoid: rewrite ? avoid.get(g) || '' : '' })));
         const resp = await fetch(API + '/api/claude', {
           method: 'POST', headers: _claudeHeaders(),
@@ -1387,8 +1392,8 @@ async function generateAIPost(opts = {}) {
     const descs = sel.map(g => genDescs.get(g) || (rewrite && avoid.get(g)) || g.description || '');
     sel.forEach((g, i) => {
       const desc = descs[i];
-      const dt = _displayTitle(g.title);
-      const em = pickEmoji({title:dt,description:desc});
+      const dt = _pubTitle(g); // у двойника PS4/PS5 — с платформой: «Gran Turismo 7 (PS4)»
+      const em = pickEmoji({title:_displayTitle(g.title),description:desc});
       const price = g.priceRUB.toLocaleString('ru');
       const nameHtml = g.id!=null ? `<a href="${_stGameUrl(g)}">${_escHtml(dt)}</a>` : _escHtml(dt);
       lines.push(`${em} ${nameHtml} — ${price} руб.${_ccRegenHtml(i)}<br><span class="cc-desc" data-gi="${i}">${_escHtml(desc)}</span>`);
@@ -1451,7 +1456,7 @@ async function regenGameDesc(btn) {
   if (!btn || btn.classList.contains('busy')) return; // двойной клик — один запрос
   const i = +btn.dataset.gi, g = _ccPostGames[i], box = document.getElementById('out-text');
   if (!g || !box.querySelector(`.cc-desc[data-gi="${i}"]`)) { showToast('⚠️ Абзац описания этой игры не найден — его стёрли вручную. Впиши текст сам или нажми «🔄 Заново»'); return; }
-  const title = _displayTitle(g.title), before = _ccDescText(box, i), gen = _ccPostGen;
+  const title = _pubTitle(g), before = _ccDescText(box, i), gen = _ccPostGen;
   btn.classList.add('busy');
   try {
     const resp = await fetch(API + '/api/claude', {
@@ -1848,6 +1853,22 @@ function _displayTitle(s){
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
+// Метка платформы у двойников: в каталоге есть та же игра под другой платформой (PS4 и PS4/PS5 —
+// разные товары с разной ценой), а _displayTitle платформу вырезает — в посте и на картинке их не отличить.
+// Возвращает g._platform для двойника, иначе ''. Кэш пересобирается, когда каталог заменили или пополнили.
+let _platTagMap = null, _platTagSrc = null, _platTagN = -1;
+function _platTag(g) {
+  if (!g || !g._platform) return '';
+  if (_platTagSrc !== games || _platTagN !== games.length) {
+    const by = new Map();
+    games.forEach(x => { if (!x._platform) return; const k = _descKey(_displayTitle(x.title)); (by.get(k) || by.set(k, new Set()).get(k)).add(x._platform); });
+    _platTagMap = by; _platTagSrc = games; _platTagN = games.length;
+  }
+  const s = _platTagMap.get(_descKey(_displayTitle(g.title)));
+  return s && s.size > 1 ? g._platform : '';
+}
+// Название для текста публикации (пост, подпись к сторис, промпт): у двойника — с платформой
+function _pubTitle(g) { const t = _displayTitle(g.title), p = _platTag(g); return p ? `${t} (${p})` : t; }
 // HD-обложка только для коллажа/сторис: ищем в IGDB по очищенному названию (console → фолбэк
 // edition, как в магазине), тянем t_1080p (≈810×1080) через VPS-прокси /igdb/img (обход DPI +
 // CORS для canvas). Возвращает крупный URL или null (слабое/не найдено) — тогда остаётся 264px.
@@ -1923,7 +1944,7 @@ function openCollage(){
   jChainNew('collage');
   jEvent('used',Object.assign({feature:'openCollage',mode:_collageMode,layout:_collageLayout,bgStyle:_collageBgStyle,logoShape:_logoShape,dropped:all.length-sel.length},jSelSnapshot(sel)));
   _preloadCollageLogo();
-  collageCovers=sel.map(g=>({title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount,img:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null)),imgEl:null,transform:null,custom:!!g._custom}));
+  collageCovers=sel.map(g=>({title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount,img:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null)),imgEl:null,transform:null,custom:!!g._custom}));
   _updateLayoutRadios(collageCovers.length);
   let loaded=0;
   collageCovers.forEach((c,i)=>{if(c.img){loadImgEl(i,c.img,()=>{loaded++;renderCollageSlots();if(loaded===collageCovers.filter(x=>x.img).length)previewCollage();});}});
@@ -2087,6 +2108,14 @@ function _ccReadColor(key){const v=localStorage.getItem(key);return /^#[0-9a-f]{
 // Коллаж: свои настройки кадра и неона (у сторис — свои, см. _stNeonOn)
 let _collFit=localStorage.getItem('cc_coll_fit')==='contain'?'contain':'cover';
 let _collNeon=localStorage.getItem('cc_coll_neon')==='1';
+// Метка платформы у двойников (PS4/PS5) рядом с названием на картинке — по умолчанию включена;
+// выключается, если в карточке не влезает. У сторис — своя (_stPlatOn).
+let _collPlatOn=true;try{_collPlatOn=localStorage.getItem('cc_coll_plat')!=='0';}catch(e){}
+function _collSetPlat(on){
+  jEvent('used',{feature:'collagePlat',on:!!on});
+  _collPlatOn=!!on;try{localStorage.setItem('cc_coll_plat',on?'1':'0');}catch(e){}
+  _collSyncFrameCtl();redrawPreview();
+}
 let _collNeonColor=_ccReadColor('cc_coll_neon_color');
 // Сдвиг кадра (t.ox/oy) хранится в пикселях превью (getCells, масштаб 1). Экспорт рисует ячейки в
 // масштабе 2 — на время его отрисовки _collDrawScale=2, иначе в PNG обложка уезжала вдвое меньше, чем на экране.
@@ -2134,6 +2163,7 @@ function _collSyncFrameCtl(){
   _ccSetBtn(document.getElementById('cl-fit-contain'),_collFit==='contain');
   const nb=document.getElementById('cl-neon');if(nb){_ccSetBtn(nb,_collNeon);nb.textContent=_collNeon?'Вкл':'Выкл';}
   const nc=document.getElementById('cl-neon-color');if(nc){nc.value=_collNeonColor;nc.style.display=_collNeon?'':'none';}
+  const pl=document.getElementById('coll-plat-on');if(pl)pl.checked=_collPlatOn;
 }
 function _collSetFit(f){
   if(_collFit!==f)jEvent('used',{feature:'collageFit',from:_collFit,to:f});
@@ -2289,6 +2319,26 @@ function _wrapLines(ctx,text,maxW,maxLines){
   }
   return lines;
 }
+// Название с меткой платформы на картинке. Метка — часть смысла (PS4 и PS4/PS5 — разные товары с разной
+// ценой), поэтому при нехватке места режется название, а метка остаётся: «Длинное назв… (PS4)».
+function _wrapTitle(ctx,title,tag,maxW,maxLines){
+  if(!tag)return _wrapLines(ctx,title,maxW,maxLines);
+  maxLines=maxLines||2;
+  const suf=' ('+tag+')',fits=ls=>ls.length<=maxLines&&ls.every(l=>ctx.measureText(l).width<=maxW);
+  let ls=_splitLines(ctx,title+suf,maxW);
+  if(fits(ls))return ls;
+  for(let t=String(title||'');t.length>1;){
+    t=t.slice(0,-1).replace(/\s+$/,'');
+    ls=_splitLines(ctx,t+'…'+suf,maxW);
+    if(fits(ls))return ls;
+  }
+  return _wrapLines(ctx,title+suf,maxW,maxLines);
+}
+// Название игры на картинке сторис/коллажа: метка платформы у двойников, если её не выключили
+function _stImgTitleTag(g){return _stPlatOn&&g&&g.plat||'';}
+function _collImgTitleTag(c){return _collPlatOn&&c&&c.plat||'';}
+// В тексте публикации (подпись к сторис, промпт) метка у двойника есть всегда — как в посте
+function _stPub(g){return g.plat?`${g.title} (${g.plat})`:g.title;}
 function _drawCardOverlay(ctx,cell,c,edge){
   edge=edge||'bottom'; // CC-4: 'top' — плашка у верхнего края (верхние ячейки фигурных макетов)
   const cardStyle=document.getElementById('coll-card-style')?.value||'dark';
@@ -2302,7 +2352,7 @@ function _drawCardOverlay(ctx,cell,c,edge){
   else{ctx.fillStyle='rgba(8,8,15,0.85)';ctx.fillRect(cell.x,py,cell.w,ph);}
   const hideTitle=document.getElementById('coll-card-hide-title')?.checked;
   const pfs=Math.max(14,Math.round(cell.w*0.1));const priceStr=c.priceRUB?c.priceRUB.toLocaleString('ru')+' ₽':'';
-  if(!hideTitle){const fs=Math.max(11,cell.w*0.072);ctx.font=`600 ${fs}px Arial,sans-serif`;ctx.fillStyle='#ffffff';ctx.textAlign='left';ctx.textBaseline='top';const maxW=cell.w-16;const tlh=fs*1.15;_wrapLines(ctx,c.title,maxW,2).forEach((l,li)=>ctx.fillText(l,cell.x+8,py+8+li*tlh));ctx.font=`700 ${pfs}px Arial,sans-serif`;ctx.fillStyle='#f0c040';ctx.fillText(priceStr,cell.x+8,py+ph-pfs-8);}
+  if(!hideTitle){const fs=Math.max(11,cell.w*0.072);ctx.font=`600 ${fs}px Arial,sans-serif`;ctx.fillStyle='#ffffff';ctx.textAlign='left';ctx.textBaseline='top';const maxW=cell.w-16;const tlh=fs*1.15;_wrapTitle(ctx,c.title,_collImgTitleTag(c),maxW,2).forEach((l,li)=>ctx.fillText(l,cell.x+8,py+8+li*tlh));ctx.font=`700 ${pfs}px Arial,sans-serif`;ctx.fillStyle='#f0c040';ctx.fillText(priceStr,cell.x+8,py+ph-pfs-8);}
   else{ctx.font=`700 ${pfs}px Arial,sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(priceStr,cell.x+8,py+ph/2);ctx.textBaseline='top';}
   if(c.discount){const bw=Math.round(cell.w*0.22),bh=Math.round(pfs*1.1);const bx=cell.x+cell.w-bw-6,by=py+ph-bh-6;ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,4);ctx.fill();ctx.fillStyle='#fff';const dfs=Math.max(9,Math.round(pfs*0.7));ctx.font=`700 ${dfs}px Arial,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(`-${c.discount}%`,bx+bw/2,by+bh/2);ctx.textAlign='left';}
 }
@@ -2835,6 +2885,13 @@ function _stRenderImgFilterBtns(){
 // ── Кадр «Целиком» и неон в шаблонах сторис (из avito-helper) ──
 let _stFit=localStorage.getItem('cc_st_fit')==='contain'?'contain':'cover';
 let _stNeonOn=localStorage.getItem('cc_st_neon')==='1';
+// Метка платформы у двойников рядом с названием на картинке (у коллажа — своя, _collPlatOn)
+let _stPlatOn=true;try{_stPlatOn=localStorage.getItem('cc_st_plat')!=='0';}catch(e){}
+function _stSetPlat(on){
+  jEvent('used',{feature:'storyPlat',on:!!on,tpl:_stTplId});
+  _stPlatOn=!!on;try{localStorage.setItem('cc_st_plat',on?'1':'0');}catch(e){}
+  _stSyncFrameCtl();_stRedrawCurrent();
+}
 let _stNeonColor=_ccReadColor('cc_st_neon_color');
 // Контуры собираются во время отрисовки шаблона (каждая обложка отмечается в _stCoverOrBg вместе с
 // текущей матрицей — «Веер» рисует повёрнутыми) и обводятся поверх: обложку шаблоны клипуют по её
@@ -2868,6 +2925,7 @@ function _stSyncFrameCtl(){
   _ccSetBtn(document.getElementById('st-fit-contain'),_stFit==='contain','var(--card)');
   const nb=document.getElementById('st-neon');if(nb){_ccSetBtn(nb,_stNeonOn,'var(--card)');nb.textContent=_stNeonOn?'Вкл':'Выкл';}
   const nc=document.getElementById('st-neon-color');if(nc&&document.activeElement!==nc)nc.value=_stNeonColor;
+  const pl=document.getElementById('st-plat-on');if(pl)pl.checked=_stPlatOn;
 }
 function _stSetFit(f){
   if(_stFit!==f)jEvent('used',{feature:'storyFit',from:_stFit,to:f,tpl:_stTplId});
@@ -2998,7 +3056,7 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc,inset){
   const qrPadW=qrS?Math.max(2,Math.round(qrS*0.07)):0;   // белая рамка кода тоже занимает место
   const qrRes=qrS?qrS+qrPadW*2+qrGap:0,textW=w-pad*2-qrRes;
   // бейдж скидки уехал к цене вниз, поэтому заголовку доступна вся ширина плашки (минус QR, если он есть)
-  ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,textW,2);ctx.restore();
+  ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),textW,2);ctx.restore();
   const titleH=tlines.length*tlh;
   // CC-8: описание рисуем ВНУТРИ плашки под ценой; высота плашки растёт от контента (без описания — как раньше, 30%)
   const descStr=(showDesc&&_stDescOn&&_stShortDescs[g.title])?_stShortDescs[g.title]:'';
@@ -3194,7 +3252,7 @@ function _stTplPoster(){
   // Название + цена + описание — один блок, прижатый к низу кадра: раньше блок стоял на фиксированной
   // высоте (72-78%), и под ним оставалась пустая тёмная полоса примерно в пятую часть сторис.
   const tlh=tfs*1.08;
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);ctx.restore();
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),cw-pad*2,3);ctx.restore();
   const descH=hasDesc?_stDrawDescZone(ctx,0,0,cw-qr.res,g,true):0;
   const blockH=tlines.length*tlh+Math.round(10*sx)+pfs+(descH?descH:0);
   const blockTop=Math.round(ch-Math.max(Math.round(ch*.055),sb)-blockH);
@@ -3269,7 +3327,7 @@ function _stTplFan(){
     const tfs=Math.max(28*sx,10),pfs=Math.max(Math.round(40*sx),14),bfss=Math.max(Math.round(20*sx),8);
     ctx.save();ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='center';ctx.textBaseline='top';
     const tlh=tfs*1.15;
-    const tlines=_wrapLines(ctx,g.title,colW-Math.round(12*sx),2);
+    const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),colW-Math.round(12*sx),2);
     tlines.forEach((l,li)=>ctx.fillText(l,midX,botY+li*tlh));ctx.restore();
     const titleH=tlines.length*tlh;
     if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',midX,botY+titleH+Math.round(6*sx));ctx.restore();}
@@ -3298,7 +3356,7 @@ function _stTplDiag(){
   if(!g)return;
   const pad=Math.round(24*sx),tfs=Math.max(44*sx,14),pfs=Math.max(Math.round(66*sx),22);
   const tlh=tfs*1.1;
-  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);ctx.restore();
+  ctx.save();ctx.font=`700 ${tfs}px 'Noto Sans',sans-serif`;const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),cw-pad*2,3);ctx.restore();
   const titleH=tlines.length*tlh;
   // Блок текста прижат к низу тёмного клина (над рядом мини-обложек, если он есть) — фиксированные 46%
   // оставляли под ценой пустую тёмную зону
@@ -3354,7 +3412,7 @@ function _stTplCascade(){
     const qrRes=qrS?qrS+qrPadW*2+qrGap:0;
     ctx.save();_stTextShadow(ctx,sx);ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.85)';ctx.textAlign='left';ctx.textBaseline='top';
     const tlh=tfs*1.1;
-    const tlines=_wrapLines(ctx,g.title,cardW-pad*2-qrRes,2);
+    const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),cardW-pad*2-qrRes,2);
     tlines.forEach((l,li)=>ctx.fillText(l,x+pad,plY+vpad+li*tlh));ctx.restore();
     const cPriceY=plY+plH-vpad-pfs;
     if(g.priceRUB){ctx.save();_stTextShadow(ctx,sx);ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,cPriceY);ctx.restore();}
@@ -3420,7 +3478,7 @@ function _stTemplateToEditor(){
     // CC-10: тёмная плашка-подложка (как в шаблоне) — иначе тексты висят прямо на картинке
     _stEls.push({type:'overlay',x:0,y:cardY,w:STORY_W,h:cardH,text:'',fontSize:10,fontFamily:'Noto Sans',color:'rgba(0,0,0,0)',bgColor:'rgba(8,8,20,0.92)',opacity:1});
     // title overlay
-    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:textW,h:titleH,text:g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
+    _stEls.push({type:'overlay',x:pad,y:cardY+10,w:textW,h:titleH,text:_stImgTitleTag(g)?`${g.title} (${g.plat})`:g.title,fontSize:38,fontFamily:'Noto Sans',color:'rgba(255,255,255,0.85)',bgColor:'transparent',opacity:1});
     // description overlay
     if(dtxt){
       const dH=Math.max(40,cardH-(titleH+14)-118); // 118 — место под плашку цены у нижней кромки
@@ -3455,7 +3513,7 @@ async function _stGenShortDescs(){
   if(btn)btn.disabled=true;if(prog)prog.style.display='';
   // Б-контекст: если для игры уже есть полное описание (магазин/архив) — даём его модели как
   // материал для сокращения, а не заставляем угадывать суть по одному названию.
-  const list=needed.map((g,i)=>`${i+1}. ${g.title}${g.description?` — есть описание: ${g.description}`:''}`).join('\n');
+  const list=needed.map((g,i)=>`${i+1}. ${_stPub(g)}${g.description?` — есть описание: ${g.description}`:''}`).join('\n');
   const prompt=`Ты пишешь короткие подписи для игровых сторис. Для каждой игры — 1 фраза, максимум ~12 слов. По-русски. Живо, без пафоса.\nЕсли у игры есть описание — сократи его до сути, не придумывай ничего от себя. Если описания нет — ориентируйся на жанр по названию, без выдумывания несуществующих деталей геймплея.\nЗАПРЕЩЕНО: "захватывающее", "невероятный", "погрузитесь", восклицания, обращения на "вы".\n\nПримеры хорошего стиля:\nGod of War Ragnarök — эпичный экшен про войну богов для любителей размашистых битв.\nStardew Valley — фермерский симулятор, чтобы расслабиться после работы.\n\nВерни строго JSON, где ключ — номер игры из списка: {"1": "подпись", "2": "подпись"}. Без текста вне JSON.\nИгры:\n${list}`;
   try{
     const resp=await fetch(API+'/api/claude',{method:'POST',headers:_claudeHeaders(),body:JSON.stringify({model:descModel,max_tokens:2000,messages:[{role:'user',content:prompt}]})});
@@ -3486,24 +3544,24 @@ async function _stGenCaption(){
   if(btn)btn.disabled=true;
   try{
     const missing=sel.filter(g=>!g.description);
-    let genDescs={};
+    const genDescs=new Map(); // по объекту игры: у двойников PS4/PS5 названия совпадают
     if(missing.length){
-      const list=missing.map((g,i)=>`${i+1}. ${g.title}`).join('\n');
+      const list=missing.map((g,i)=>`${i+1}. ${_stPub(g)}`).join('\n');
       const prompt=`Короткие описания игр для TG-поста, 2-3 предложения. По-русски. Без пафоса.\nЗАПРЕЩЕНО: "захватывающее", "невероятный", "погрузитесь", восклицания.\nJSON, где ключ — номер игры из списка: {"1": "описание", "2": "описание"}. Только JSON.\nИгры:\n${list}`;
       const resp=await fetch(API+'/api/claude',{method:'POST',headers:_claudeHeaders(),body:JSON.stringify({model:descModel,max_tokens:3000,messages:[{role:'user',content:prompt}]})});
       if(!resp.ok) throw new Error('HTTP '+resp.status);
       const data=await resp.json();
       const text=data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
-      try{const p=JSON.parse(text);Object.entries(_aiByIndex(p)).forEach(([idx,d])=>{const g=missing[parseInt(idx,10)-1];if(g&&typeof d==='string'&&d.trim())genDescs[g.title]=d.trim();});}
+      try{const p=JSON.parse(text);Object.entries(_aiByIndex(p)).forEach(([idx,d])=>{const g=missing[parseInt(idx,10)-1];if(g&&typeof d==='string'&&d.trim())genDescs.set(g,d.trim());});}
       catch(e){ jError('story_caption_json',e&&e.message,{model:descModel,raw:text,titles:missing.map(g=>g.title)}); }
     }
     // Название — ссылка на карточку игры, как в TG-посте. В поле лежит markdown, при копировании
     // он превращается в кликабельную ссылку (_stCopyCap). У своих товаров без id ссылки нет.
     const lines=sel.map(g=>{
-      const desc=g.description||genDescs[g.title]||'';
+      const desc=g.description||genDescs.get(g)||'';
       const price=g.priceRUB?` — ${g.priceRUB.toLocaleString('ru')} руб.`:'';
       const url=_stGameUrl(g);
-      const name=url?`[${g.title}](${url})`:g.title;
+      const name=url?`[${_stPub(g)}](${url})`:_stPub(g);
       return `${pickEmoji({title:g.title,description:desc})} ${name}${price}\n${desc}`.trim();
     });
     _stCapText=lines.join('\n\n');
@@ -3514,7 +3572,7 @@ async function _stGenCaption(){
       aiNew:Object.keys(genDescs).length,fromArchive:sel.length-missing.length,aiPasses:_jAiPasses});
     document.getElementById('st-cap-text').value=_stCapText; // поле редактируемое: правки уезжают в _stCapText через oninput
     document.getElementById('st-cap-out').style.display='';
-    const lost=missing.filter(g=>!genDescs[g.title]).length;
+    const lost=missing.filter(g=>!genDescs.has(g)).length;
     showToast(lost?`⚠️ Текст готов, но без описания: ${lost}`:'✅ Текст готов');
   }catch(e){jError('story_caption_gen',e.message,{model:descModel,n:sel.length});showToast('Ошибка: '+e.message);}
   finally{if(btn)btn.disabled=false;}
@@ -3539,7 +3597,7 @@ function openStory(){
   if(!all.length){showToast('Выбери хотя бы 1 игру');return;}
   if(all.length>5)showToast('Для сторис доступны первые 5 игр (в кадре одновременно до 3)');
   const sel=all.slice(0,5);
-  _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
+  _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
   _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stRedoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
   _stShortDescsAI={};_stCapBot='';_jTplSwitches=0;
   jChainNew('story');
@@ -3972,7 +4030,7 @@ function _stTplHorizon(){
   const dark=_stTextIsDark(g.imgEl,0.36,0.52); // CC-9: меряем полосу обложки под заголовком (~центр кадра), а не всю картинку
   ctx.save();ctx.font='600 '+tfs+"px 'Noto Sans',sans-serif";ctx.fillStyle=dark?'rgba(10,10,18,0.88)':'rgba(255,255,255,0.80)';ctx.shadowColor=dark?'rgba(255,255,255,0.35)':'rgba(0,0,0,0.55)';ctx.shadowBlur=Math.round(6*sx);ctx.textAlign='center';ctx.textBaseline='bottom';
   const tlh=tfs*1.08;
-  const tlines=_wrapLines(ctx,g.title,cw-pad*2,3);
+  const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),cw-pad*2,3);
   tlines.forEach((l,li)=>ctx.fillText(l,cw/2,centerY-(tlines.length-1-li)*tlh));ctx.restore();
   if(g.priceRUB){ctx.save();ctx.font='700 '+pfs+'px Oswald,sans-serif';ctx.fillStyle='#f0c040';ctx.textAlign='center';ctx.textBaseline='top';ctx.shadowColor='rgba(240,192,32,0.50)';ctx.shadowBlur=Math.round(20*sx);ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',cw/2,centerY+Math.round(6*sx));ctx.restore();}
   if(g.discount){const bfs=Math.max(Math.round(36*sx),12),bw=Math.round(120*sx),bh=Math.round(bfs*1.8),bx=cw-bw-Math.round(20*sx)-_stTopRightBlocked(cw,ch),by=Math.round(20*sx);ctx.save();ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(6*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font='700 '+bfs+'px Oswald,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
@@ -4041,7 +4099,7 @@ function _stTplNeon(){
   const tfs=Math.max(38*sx,12);
   ctx.save();ctx.font='600 '+tfs+"px 'Noto Sans',sans-serif";ctx.fillStyle='rgba(255,255,255,0.75)';ctx.textAlign='center';ctx.textBaseline='bottom';
   const tlh=tfs*1.08,tAnchor=covY-Math.round(12*sx);
-  const tlines=_wrapLines(ctx,g.title,cw-Math.round(40*sx),3);
+  const tlines=_wrapTitle(ctx,g.title,_stImgTitleTag(g),cw-Math.round(40*sx),3);
   tlines.forEach((l,li)=>ctx.fillText(l,cw/2,tAnchor-(tlines.length-1-li)*tlh));ctx.restore();
   const qr=_stCornerQr(ctx,cw,ch,g);
   // описание теперь может вырасти до 4 строк — прижимаем его к низу кадра, а не держим на
@@ -4131,7 +4189,7 @@ async function downloadStoryBatch(){
   try{
   await document.fonts.ready;
   for(const g of list){
-    const entry={id:g.id,title:_displayTitle(g.title),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
+    const entry={id:g.id,title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
     // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком.
     // Для своих товаров (custom) IGDB не дёргаем — там только игры, прилетит чужая обложка.
     const iconUrl=entry.imgUrl;

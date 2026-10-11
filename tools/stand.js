@@ -587,6 +587,120 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   await p.keyboard.press('Escape');
   ok('горячие клавиши: Esc закрывает пост', await p.evaluate(() => !document.getElementById('tg-modal').classList.contains('open')));
 
+  // ── Метка платформы у двойников (PS4 и PS4/PS5 — разные товары, а _displayTitle платформу вырезает) ──
+  // Заглушки — только чтобы на версии без метки проверки честно падали, а не роняли стенд
+  const plStubs = () => p.evaluate(() => { if (typeof _platTag !== 'function') { window._platTag = () => ''; window._stSetPlat = () => {}; window._collSetPlat = () => {}; window._wrapTitle = (x, t, tag, w, n) => _wrapLines(x, t, w, n); } });
+  await plStubs();
+  const pl = await p.evaluate(() => {
+    const key = g => String(_displayTitle(g.title) || '').replace(/[™®©]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const by = {}; games.forEach(g => { if (g._platform) (by[key(g)] = by[key(g)] || new Set()).add(g._platform); });
+    const twins = games.filter(g => g._platform && by[key(g)].size > 1);
+    filtered = [...games]; renderTable();
+    const badges = [...document.querySelectorAll('#game-tbody tr')].map(r => (r.querySelector('.td-title .plat-badge') || {}).textContent || '');
+    const want = games.map(g => g._platform || '');
+    const tags = typeof _platTag === 'function' ? games.map(g => _platTag(g)) : [];
+    return { twins: [...new Set(twins.map(g => _displayTitle(g.title)))], nPlat: want.filter(Boolean).length,
+             table: badges.join() === want.join(), tags: tags.length === games.length && tags.every((t, i) => t === (twins.includes(games[i]) ? games[i]._platform : '')) };
+  });
+  ok('метка: в таблице плашка платформы у всех игр с платформой', pl.nPlat > 50 && pl.table, JSON.stringify({ nPlat: pl.nPlat, table: pl.table }));
+  ok('метка: двойник — та же игра под другой платформой (GT7, Bannerlord, BF2042, Medieval Dynasty)',
+    pl.tags && ['Gran Turismo 7', 'Mount & Blade II: Bannerlord', 'Battlefield 2042', 'Medieval Dynasty'].every(t => pl.twins.includes(t)), JSON.stringify(pl.twins));
+
+  // Пост: метка ровно у двойников; переживает 🔄 одной игры и «Заново»; уходит в канал, очередь и копию
+  const lab = await p.evaluate(() => {
+    window.__tw = games.filter(g => /^gran turismo/i.test(_displayTitle(g.title)) && g._platform && g.priceRUB);
+    window.__single = games.find(g => g._platform && g.priceRUB && g.description && !games.some(x => x !== g && _displayTitle(x.title) === _displayTitle(g.title)));
+    games.forEach(g => g._sel = false); [...__tw, __single].forEach(g => g._sel = true);
+    window.__lab = g => `${_displayTitle(g.title)} (${g._platform})`;
+    return { tw: __tw.map(__lab), single: _displayTitle(__single.title) };
+  });
+  const postHas = () => p.evaluate(() => { const t = document.getElementById('out-text').innerText;
+    return { tw: __tw.every(g => t.includes(__lab(g))), single: t.includes(_displayTitle(__single.title)) && !t.includes(_displayTitle(__single.title) + ' (') }; });
+  await p.evaluate(async () => { openTGPost(); await generateAIPost(); });
+  const lp1 = await postHas();
+  ok('метка в посте: у двойников «Gran Turismo 7 (PS4)», у одиночки нет', lab.tw.length === 2 && lp1.tw && lp1.single, JSON.stringify({ ...lab, ...lp1 }));
+  nq = nClaude(); claudeQ.push(JSON.stringify({ 1: 'ПЛАТ-ОДНА' }));
+  await p.evaluate(async () => { await regenGameDesc(document.querySelector(`#out-text .cc-regen[data-gi="${_ccPostGames.indexOf(__tw[0])}"]`)); });
+  const lp2 = await postHas(), oneBody = nClaude() > nq ? JSON.parse(posted['/api/claude'].slice(-1)[0]).messages[0].content : '';
+  claudeQ.push(JSON.stringify({ 1: 'ПЛАТ-1', 2: 'ПЛАТ-2', 3: 'ПЛАТ-3' }));
+  await p.evaluate(() => regenPost());
+  const lp3 = await postHas(), regenOk = await p.evaluate(() => document.getElementById('out-text').innerText.includes('ПЛАТ-3'));
+  ok('метка в посте переживает 🔄 игры и «Заново»; в промпт идёт название с платформой',
+    lp2.tw && lp2.single && lp3.tw && lp3.single && regenOk && oneBody.includes(lab.tw[0]), JSON.stringify({ lp2, lp3, regenOk, prompt: oneBody.slice(-120) }));
+  claudeQ.length = 0;
+  nq = (posted['/api/cc-queue'] || []).length; const ntp = (posted['/api/tg-post'] || []).length;
+  const lo = await p.evaluate(async () => { const plain = _outSerialize('plain'); _tgDisarmSend(); await queuePostToBot(); sendPostToTG(); await sendPostToTG(); return plain; });
+  const lq = JSON.parse((posted['/api/cc-queue'] || []).slice(nq)[0] || '{"text":""}').text, lt = JSON.parse((posted['/api/tg-post'] || []).slice(ntp)[0] || '{"text":""}').text;
+  ok('метка в посте уходит в копию, очередь бота и канал', lab.tw.every(s => lo.includes(s) && lq.includes(s) && lt.includes(s)), JSON.stringify({ q: lq.slice(0, 120), tg: lt.slice(0, 120) }));
+  await p.keyboard.press('Escape');
+
+  // Название с меткой на картинке: не влезает — режется название, метка остаётся целой
+  const wt = await p.evaluate(() => {
+    const x = document.createElement('canvas').getContext('2d'); x.font = "600 40px 'Noto Sans',sans-serif";
+    const ls = _wrapTitle(x, 'Очень длинное название игры, которое никак не помещается в две строки карточки', 'PS4/PS5', 300, 2);
+    return { ls, w: ls.map(l => Math.round(x.measureText(l).width)), short: _wrapTitle(x, 'GT 7', 'PS4', 300, 2), none: _wrapTitle(x, 'GT 7', '', 300, 2) };
+  });
+  ok('метка на картинке: длинное название режется, метка цела, ширина в пределах',
+    wt.ls.length === 2 && wt.ls[1].endsWith('(PS4/PS5)') && wt.ls.join(' ').includes('…') && wt.w.every(w => w <= 300) && wt.short.join(' ') === 'GT 7 (PS4)' && wt.none.join(' ') === 'GT 7', JSON.stringify(wt));
+
+  // Сторис: метка у двойника на картинке во всех шаблонах; переключатель её убирает; у одиночки кадр не меняется.
+  // Запись fillText — какие строки шаблон реально нарисовал (метка не обрезана «…» на конце)
+  await p.evaluate(() => { window.__ft = []; const o = CanvasRenderingContext2D.prototype.fillText; window.__ftOrig = o;
+    CanvasRenderingContext2D.prototype.fillText = function (s) { if (window.__ftOn) __ft.push(String(s)); return o.apply(this, arguments); }; });
+  const drawn = (fn) => p.evaluate(fn => { __ft = []; __ftOn = true; try { (0, eval)(fn)(); } finally { __ftOn = false; } return __ft.slice(); }, fn.toString());
+  await p.evaluate(() => { games.forEach(g => g._sel = false); [...__tw, games.find(g => /bannerlord/i.test(g.title) && _platTag(g))].filter(Boolean).forEach(g => g._sel = true); openStory(); });
+  await sleep(8000);
+  const stPl = [];
+  for (const n of [1, 2, 3]) {
+    await p.evaluate(n => { _stSetMode('templates'); stSetGameCount(n); }, n);
+    for (const t of tpls) {
+      const r = await p.evaluate(t => { _stSetNeon(false); _stSetFit('cover'); _stSetTpl(t); _stSetPlat(false); const off = __snap('st-canvas'); _stSetPlat(true); const on = __snap('st-canvas'); return __diff(off, on); }, t);
+      const txt = await drawn(() => _stRenderTemplate());
+      const tagged = txt.some(s => /\((PS4|PS5|PS4\/PS5)\)$/.test(s)), cut = txt.some(s => /\((PS4|PS5)[^)]*…$|\(PS4\/…$/.test(s));
+      stPl.push({ n, t, diff: r, tagged, cut });
+      if (n === 3) await shot('st-canvas', `story-plat-n3-${t}`);
+    }
+  }
+  const stBad = stPl.filter(x => !(x.diff > 0 && x.tagged && !x.cut));
+  ok('метка в сторис: у двойника во всех шаблонах n=1..3, цела, переключатель её убирает', stPl.length && !stBad.length, JSON.stringify(stBad.length ? stBad : stPl.length));
+  const stCap = await p.evaluate(async () => { stSetGameCount(2); await _stGenCaption(); return _stCapText; });
+  ok('метка в тексте к сторис у двойников', lab.tw.every(s => stCap.includes(s)), stCap.slice(0, 160));
+  await p.evaluate(() => { _stSetMode('templates'); _stSetPlat(true); closeStory(); games.forEach(g => g._sel = false); games.filter(g => g._platform && g.priceRUB && !_platTag(g)).slice(0, 3).forEach(g => g._sel = true); openStory(); });
+  await sleep(8000);
+  const stSingle = await p.evaluate(() => _ST_TPLS.map(t => { stSetGameCount(3); _stSetTpl(t.id); _stSetPlat(false); const a = __snap('st-canvas'); _stSetPlat(true); const b = __snap('st-canvas'); _stSetPlat(false); const c = __snap('st-canvas'); _stSetPlat(true); return { t: t.id, onOff: __diff(a, b), stable: __diff(a, c) }; }));
+  ok('метка в сторис: у игр без двойника переключатель кадр не меняет', stSingle.every(x => x.stable === 0 && x.onOff === 0), JSON.stringify(stSingle.filter(x => x.onOff || x.stable)));
+  await p.evaluate(() => closeStory());
+
+  // Коллаж «Карточки»: метка у двойника, переключатель её убирает; у одиночек кадр не меняется
+  const collPl = async pick => {
+    await p.evaluate(pick => { games.forEach(g => g._sel = false); (0, eval)(pick)().forEach(g => g._sel = true); openCollage(); setCollageMode('cards'); }, pick.toString());
+    await sleep(6000);
+    return p.evaluate(() => { _collSetPlat(false); redrawPreview(); const a = __snap('coll-canvas'); __ft = []; __ftOn = true; _collSetPlat(true); __ftOn = false;
+      const b = __snap('coll-canvas'); const txt = __ft.slice(); _collSetPlat(false); const c = __snap('coll-canvas'); _collSetPlat(true);
+      const res = { onOff: __diff(a, b), stable: __diff(a, c), tagged: txt.some(s => /\((PS4|PS5|PS4\/PS5)\)$/.test(s)) }; return res; });
+  };
+  const cTw = await collPl(() => [...__tw, ...games.filter(g => /medieval dynasty/i.test(g.title) && _platTag(g))]);
+  await shot('coll-canvas', 'collage-plat-cards');
+  await p.evaluate(() => closeCollage());
+  const cSi = await collPl(() => games.filter(g => g._platform && g.priceRUB && !_platTag(g)).slice(0, 4));
+  await p.evaluate(() => { setCollageMode('covers'); closeCollage(); });
+  ok('метка в коллаже: у двойника есть, переключатель убирает; у одиночек кадр не меняется',
+    cTw.onOff > 0 && cTw.tagged && cTw.stable === 0 && cSi.onOff === 0 && cSi.stable === 0, JSON.stringify({ cTw, cSi }));
+  await p.evaluate(() => { CanvasRenderingContext2D.prototype.fillText = __ftOrig; });
+
+  // Переключатели переживают перезагрузку страницы и пишут событие в журнал
+  await p.evaluate(() => { _stSetPlat(false); _collSetPlat(false); try { jFlush(); } catch (e) {} }); await sleep(1500);
+  const plJ = (posted['/cc/journal'] || []).join('\n');
+  ok('метка: переключение пишется в журнал (storyPlat, collagePlat)', /storyPlat/.test(plJ) && /collagePlat/.test(plJ));
+  await p.reload({ waitUntil: 'networkidle0', timeout: 90000 });
+  await p.waitForFunction(() => typeof games !== 'undefined' && games.length > 50, { timeout: 60000 });
+  await plStubs();
+  const plR = await p.evaluate(() => { games.forEach(g => g._sel = false); games.filter(g => g.priceRUB).slice(0, 2).forEach(g => g._sel = true); openStory(); const st = document.getElementById('st-plat-on')?.checked; closeStory();
+    openCollage(); const cl = document.getElementById('coll-plat-on')?.checked; closeCollage();
+    const v = s => { try { return (0, eval)(s); } catch (e) { return 'нет'; } };
+    const r = { st: v('_stPlatOn'), cl: v('_collPlatOn'), stBox: st, clBox: cl }; _stSetPlat(true); _collSetPlat(true); return r; });
+  ok('метка: выключенные переключатели переживают перезагрузку', plR.st === false && plR.cl === false && plR.stBox === false && plR.clBox === false, JSON.stringify(plR));
+
   ok('JS-ошибок нет', jsErr.length === 0, jsErr.slice(0, 5).join(' | '));
   const f = results.filter(r => !r.pass).length;
   console.log(`\nИТОГ: ${results.length - f}/${results.length} PASS. Рендеры: ${OUT}`);
