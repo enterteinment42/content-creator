@@ -20,6 +20,8 @@ const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers
 const results = []; const ok = (name, pass, info = '') => { results.push({ name, pass, info }); console.log((pass ? 'PASS ' : 'FAIL ') + name + (info ? ' — ' + info : '')); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const posted = {};
+const claudeQ = [];   // ответы-заглушки Claude по очереди (текст модели); очередь пуста — 500
+const igdbCover = []; // какие названия приложение искало в IGDB за HD-обложкой
 
 const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); fs.createReadStream(SRC).pipe(s); }).listen(PORT);
 
@@ -33,10 +35,15 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     if (!u.startsWith('https://api.poigraem.shop')) return r.continue();
     if (r.method() === 'OPTIONS') return r.respond({ status: 204, headers: CORS });
     const pth = new URL(u).pathname;
+    if (pth === '/igdb/cover') igdbCover.push(new URL(u).searchParams.get('name'));
     if (/^\/(api\/(claude|tg-post|cc-queue)|cc\/journal)/.test(pth)) {
       (posted[pth] = posted[pth] || []).push(r.postData() || '');
-      // Claude сломан нарочно: пост обязан собираться из описаний снапшота и без него
-      if (pth === '/api/claude') return r.respond({ status: 500, headers: CORS, contentType: 'application/json', body: '{"error":"stub"}' });
+      // Claude сломан нарочно: пост обязан собираться из описаний снапшота и без него.
+      // Проверки Б-1/Б-2 кладут в claudeQ ответ модели на один запрос.
+      if (pth === '/api/claude') {
+        if (!claudeQ.length) return r.respond({ status: 500, headers: CORS, contentType: 'application/json', body: '{"error":"stub"}' });
+        return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ content: [{ type: 'text', text: claudeQ.shift() }] }) });
+      }
       return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, draftId: 'stand1' }) });
     }
     r.continue();
@@ -77,6 +84,13 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const t46 = await p.evaluate(() => __toast());
   ok('аудит 46: тост про первые 5', /доступны первые 5 игр \(в кадре одновременно до 3\)/.test(t46), t46);
   await sleep(15000); // HD-обложки из IGDB
+  // Б-4: в кадре до 3 игр — HD из IGDB ищется только для них, 4-я и 5-я остаются на лёгкой обложке
+  const hd = await p.evaluate(asked => {
+    const q = t => [_cleanConsoleTitle(t), _cleanEditionTitle(t)];
+    return { n: _stG.length, top: _stG.slice(0, 3).map(g => !!g._hdDone), rest: _stG.slice(3).map(g => !!g._hdDone),
+             restAsked: _stG.slice(3).filter(g => q(g.title).some(x => x && asked.includes(x))).map(g => g.title), asked: asked.length };
+  }, igdbCover);
+  ok('Б-4: HD из IGDB только у первых 3 слотов', hd.n === 5 && hd.top.every(Boolean) && !hd.rest.some(Boolean) && !hd.restAsked.length, JSON.stringify(hd));
   await p.evaluate(() => _stSetMode('templates'));
   const ctl = await p.evaluate(() => { _stSetTpl('poster'); const a = __snap('st-canvas'); _stSetTpl('neon'); const b = __snap('st-canvas'); return __diff(a, b); });
   ok('КОНТРОЛЬ: смена шаблона меняет кадр', ctl > 5, ctl + '%');
@@ -157,7 +171,100 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('пресет бренда: свежий без неона гасит неон и цвет', !brand.fresh.neon && brand.fresh.color === '#00dcc3', JSON.stringify(brand.fresh));
   ok('пресет бренда: пресет с неоном его включает', brand.pink.neon && brand.pink.color === '#ff2bd6', JSON.stringify(brand.pink));
   ok('пресет бренда: старый пресет неон не сбрасывает', brand.old.neon && brand.old.color === '#ff2bd6', JSON.stringify(brand.old));
-  await p.evaluate(() => { _stSetFit('cover'); closeStory(); });
+  await p.evaluate(() => _stSetFit('cover'));
+
+  // QR на карточку игры: код в правом нижнем углу над зоной TG, чёрно-белый (сканируемый), а не пустое место
+  const qr = await p.evaluate(async () => {
+    stSetGameCount(1); _stSetPlatform('tg'); _stSetNeon(false); _stSetTpl('poster');
+    _stSetQrOn(false); const off = __snap('st-canvas');
+    _stSetQrOn(true); await _stQrEnsure(_stG.slice(0, 1)); _stRenderTemplate(); const on = __snap('st-canvas');
+    // середина кода по геометрии _stCornerQr — без белой подложки и фона вокруг
+    const cw = on.w, ch = on.h, s = Math.round(Math.min(cw, ch) * .115), pd = Math.round(Math.min(cw, ch) * .03), x0 = cw - pd - s, y0 = _stFloor(ch) - pd - s;
+    const box = [(x0 + s * .15) / cw, (y0 + s * .15) / ch, (x0 + s * .85) / cw, (y0 + s * .85) / ch], c = __crop(on, ...box);
+    let dk = 0, lt = 0; for (let i = 0; i < c.d.length; i += 4) { const l = (c.d[i] + c.d[i + 1] + c.d[i + 2]) / 3; if (l < 70) dk++; else if (l > 190) lt++; }
+    const pct = n => Math.round(100 * n / (c.d.length / 4));
+    return { diff: __diff(__crop(off, ...box), c), dark: pct(dk), light: pct(lt), miss: _stQrMissing(_stG.slice(0, 1)) };
+  });
+  // и чёрного, и белого заметно: пустая белая подложка без кода не пройдёт (проверено на копии без drawImage)
+  ok('QR на сторис: код в углу над зоной TG, чёрно-белый', qr.miss === 0 && qr.diff > 30 && qr.dark > 15 && qr.light > 15 && qr.dark + qr.light > 70, JSON.stringify(qr)); await shot('st-canvas', 'story-qr-poster');
+
+  // Авто-контраст: заголовок на светлой обложке тёмный, на тёмной — белый; «Затемнение» и полоса под заголовком учтены
+  const lc = await p.evaluate(async () => {
+    const mk = async (h, paint) => { const c = document.createElement('canvas'); c.width = 40; c.height = h; paint(c.getContext('2d')); return __img(c.toDataURL()); };
+    const white = await mk(60, x => { x.fillStyle = '#f4f4f4'; x.fillRect(0, 0, 40, 60); });
+    const black = await mk(60, x => { x.fillStyle = '#101010'; x.fillRect(0, 0, 40, 60); });
+    const band = await mk(100, x => { x.fillStyle = '#101010'; x.fillRect(0, 0, 40, 100); x.fillStyle = '#f4f4f4'; x.fillRect(0, 36, 40, 16); });
+    const bak = [_stImgFilter, _stImgFilterAmt];
+    _stImgFilter = 'none'; const r = { white: _stTextIsDark(white), black: _stTextIsDark(black), band: _stTextIsDark(band, .36, .52), bandWhole: _stTextIsDark(band) };
+    _stImgFilter = 'dark'; _stImgFilterAmt = 1; r.whiteDarkened = _stTextIsDark(white);
+    [_stImgFilter, _stImgFilterAmt] = bak; return r;
+  });
+  ok('авто-контраст: светлая → тёмный текст, тёмная → белый, затемнение и полоса учтены', lc.white && !lc.black && lc.band && !lc.bandWhole && !lc.whiteDarkened, JSON.stringify(lc));
+
+  // Шрифт: Oswald вшит и рисует кириллицу (без него канвас молча берёт запасной шрифт).
+  // Признак — ширина строки не зависит от запасного шрифта: «Oswald, serif» = «Oswald, monospace».
+  // Сравнивать с одним запасным нельзя: кириллица в monospace случайно почти той же ширины (286 против 290).
+  const fo = await p.evaluate(async () => {
+    await document.fonts.load("700 40px 'Oswald'", 'СКИДКА'); await document.fonts.load("700 40px 'Oswald'", 'SALE');
+    const x = document.createElement('canvas').getContext('2d'), w = (f, s) => { x.font = f; return Math.round(x.measureText(s).width); };
+    const m = s => [w(`700 40px 'Oswald', serif`, s), w(`700 40px 'Oswald', monospace`, s), w('700 40px serif', s)];
+    return { cyr: m('СКИДКА НЕДЕЛИ'), lat: m('BIG SALE NOW') };
+  });
+  const osw = ([a, b, fb]) => a === b && Math.abs(a - fb) > 10;
+  ok('шрифт Oswald рисует кириллицу и латиницу', osw(fo.cyr) && osw(fo.lat), JSON.stringify(fo));
+
+  // Б-1: ответ модели для сторис маппится по номеру игры, а не по точному названию (ключи вразнобой)
+  await p.evaluate(() => { stSetGameCount(3); window.__stDescBak = _stG.map(g => g.description); _stG.forEach(g => g.description = ''); _stShortDescs = {}; });
+  claudeQ.push(JSON.stringify({ 3: 'КОРОТКО-3', 1: 'КОРОТКО-1', 2: 'КОРОТКО-2' }));
+  await p.evaluate(() => _stGenShortDescs());
+  const sd = await p.evaluate(() => _stG.slice(0, 3).map(g => _stShortDescs[g.title] || null));
+  ok('Б-1 сторис: короткие описания — по номеру игры', sd.join() === 'КОРОТКО-1,КОРОТКО-2,КОРОТКО-3', JSON.stringify(sd));
+  claudeQ.push('```json\n' + JSON.stringify({ 2: 'ПОДРОБНО-2', 1: 'ПОДРОБНО-1', 3: 'ПОДРОБНО-3' }) + '\n```');
+  await p.evaluate(() => _stGenCaption());
+  const cap = await p.evaluate(() => { const b = _stCapText.split('\n\n'); return b.length === 3 ? b.map((s, i) => s.includes(_stG[i].title) && s.includes('ПОДРОБНО-' + (i + 1))) : [_stCapText]; });
+  ok('Б-1 сторис: текст к сторис — описание под своей игрой', cap.length === 3 && cap.every(x => x === true), JSON.stringify(cap));
+  await p.evaluate(() => { _stG.forEach((g, i) => g.description = __stDescBak[i]); _stShortDescs = {}; _stCapText = ''; _stRenderTemplate(); });
+
+  // Б-3: URL обложки с апострофом не ломает клик в пикере (раньше URL жил в onclick-атрибуте)
+  const pk = await p.evaluate(async () => {
+    const url = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='40'><rect width='30' height='40' fill='red'/></svg>";
+    const fake = { id: 'stand-fake', title: "Stand'Test Q", icon: url, priceRUB: 1 }; games.push(fake);
+    const bak = { u: _stG[0].imgUrl, e: _stG[0].imgEl, r: _stG[0]._replaced };
+    _stPickImg(0); _pickerRenderStore("Stand'Test");
+    const cells = document.querySelectorAll('#cc-picker-grid > div'); if (cells[0]) cells[0].click();
+    const got = _stG[0].imgUrl, open = document.getElementById('cc-img-picker').style.display;
+    await new Promise(r => setTimeout(r, 500)); // onload пикера пишет imgEl асинхронно — ждём, потом откатываем
+    games.splice(games.indexOf(fake), 1); _closePicker(); Object.assign(_stG[0], { imgUrl: bak.u, imgEl: bak.e, _replaced: bak.r }); _stRedrawCurrent();
+    return { n: cells.length, applied: got === url, open };
+  });
+  ok('Б-3 пикер: обложка с апострофом в URL ставится кликом', pk.n === 1 && pk.applied && pk.open === 'none', JSON.stringify(pk));
+
+  // Батч: сторис на каждую выбранную игру, по файлу на игру; после батча кадр пользователя на месте
+  const bt = await p.evaluate(async () => {
+    const before = { g: _stG, n: _stGameCount }; const sel = __sel(3); window.__dl = [];
+    await downloadStoryBatch();
+    const files = []; for (const d of __dl) { const im = await __img(d.href); files.push({ name: d.name, w: im.naturalWidth, h: im.naturalHeight }); }
+    return { files, want: sel.map(t => 'story-' + _slugify(_displayTitle(t)) + '.png'), distinct: new Set(__dl.map(d => d.href)).size, restored: _stG === before.g && _stGameCount === before.n };
+  });
+  ok('батч-сторис: по PNG 1080×1920 на игру, имена по играм, кадр восстановлен',
+    bt.files.length === 3 && bt.files.every((f, i) => f.w === 1080 && f.h === 1920 && f.name === bt.want[i]) && bt.distinct === 3 && bt.restored, JSON.stringify(bt));
+  await saveDl('export-story-batch-1');
+
+  // Горячие клавиши редактора (UX-15): Delete, Ctrl+Z, Ctrl+Y; в поле ввода Delete элементы не трогает; Esc закрывает окно
+  await p.evaluate(() => { _stSetMode('editor'); _stEls = []; _stUndoStack = []; _stRedoStack = []; stAddSticker(); _stSel = _stEls.length - 1; document.activeElement && document.activeElement.blur(); });
+  const nEl = () => p.evaluate(() => _stEls.length), chord = async k => { await p.keyboard.down('Control'); await p.keyboard.press(k); await p.keyboard.up('Control'); };
+  const hk = { added: await nEl() };
+  await p.keyboard.press('Delete'); hk.del = await nEl();
+  await chord('z'); hk.undo = await nEl();
+  await chord('y'); hk.redo = await nEl();
+  // поле — своё, временное: поля боковой панели редактора рисуются по выделению, а скрытое поле фокус не берёт
+  await chord('z'); await p.evaluate(() => { _stSel = _stEls.length - 1; const i = document.createElement('input'); i.id = 'stand-inp'; document.getElementById('st-editor-panel').appendChild(i); i.focus(); });
+  await p.keyboard.press('Delete'); hk.inInput = await nEl(); hk.focused = await p.evaluate(() => document.activeElement.id);
+  await p.evaluate(() => { document.getElementById('stand-inp').remove(); _stEls = []; _stSel = -1; _stUndoStack = []; _stRedoStack = []; _stSetMode('templates'); });
+  await p.keyboard.press('Escape'); hk.escClosed = await p.evaluate(() => !document.getElementById('story-modal').classList.contains('open'));
+  ok('горячие клавиши: Delete, Ctrl+Z, Ctrl+Y, ввод не задет, Esc закрывает сторис',
+    hk.added === 1 && hk.del === 0 && hk.undo === 1 && hk.redo === 0 && hk.inInput === 1 && hk.focused === 'stand-inp' && hk.escClosed, JSON.stringify(hk));
+  await p.evaluate(() => { if (document.getElementById('story-modal').classList.contains('open')) closeStory(); });
 
   // ── Коллаж ─────────────────────────────────────────────────
   await p.evaluate(() => { __sel(5); openCollage(); }); await sleep(8000);
@@ -186,7 +293,9 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     const r = await p.evaluate(async f => { const d = __dl[0]; if (!d) return null; const im = await __img(d.href); return { w: im.naturalWidth, h: im.naturalHeight, want: [_COLLAGE_FORMATS[f].w, _COLLAGE_FORMATS[f].h] }; }, fmt);
     ok(`экспорт коллажа ${fmt}`, r && r.w === r.want[0] && r.h === r.want[1], JSON.stringify(r)); await saveDl(`export-collage-${fmt}`);
   }
-  await p.evaluate(() => closeCollage());
+  await p.keyboard.press('Escape');
+  ok('горячие клавиши: Esc закрывает коллаж', await p.evaluate(() => !document.getElementById('coll-modal').classList.contains('open')));
+  await p.evaluate(() => { if (document.getElementById('coll-modal').classList.contains('open')) closeCollage(); });
 
   const html = fs.readFileSync(SRC, 'utf8');
   const dbl = html.match(/<[^>]*style="[^"]*display:\s*none[^"]*display:\s*none[^"]*"[^>]*>/g) || [];
@@ -210,6 +319,44 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   }
   ok('М1: тост об успехе', /Черновик в боте/.test(await p.evaluate(() => __toast())));
   ok('М1: журнал получил tg_queue', /tg_queue/.test((posted['/cc/journal'] || []).join('\n')));
+
+  // ── «📤 Отправить в канал» ───────────────────────────────
+  // Публикация необратима: первый клик только взводит кнопку, второй шлёт ровно один запрос.
+  // /api/tg-post отправляет с parse_mode Markdown — значит в теле [название](url), а не HTML.
+  await p.evaluate(() => sendPostToTG()); await sleep(500);
+  const armed = (posted['/api/tg-post'] || []).length;
+  await p.evaluate(() => sendPostToTG()); await sleep(1500);
+  const tp = posted['/api/tg-post'] || [];
+  ok('📤 в канал: первый клик взводит, второй шлёт ровно один запрос', armed === 0 && tp.length === 1, `${armed} → ${tp.length}`);
+  if (tp[0]) {
+    const b = JSON.parse(tp[0]);
+    ok('📤 в канал: Markdown со ссылками ?game=, без HTML-тегов', /\]\(https:\/\/poigraem\.shop\/\?game=/.test(b.text) && !/<\/?[a-z][^>]*>/i.test(b.text), b.text.slice(0, 160));
+    fs.writeFileSync(path.join(OUT, 'tg-post-body.md'), b.text);
+  }
+  ok('📤 в канал: тост об успехе', /Пост отправлен в канал/.test(await p.evaluate(() => __toast())), await p.evaluate(() => __toast()));
+
+  // ── Б-1/Б-2: описания от модели в посте ───────────────────
+  // Ключи-индексы вразнобой → описание под своей игрой; потерянные ключи и битый JSON — честный «⚠️ без описания: N»
+  const aiPost = async reply => {
+    const nq = (posted['/api/claude'] || []).length; claudeQ.push(reply);
+    return p.evaluate(async nq => {
+      const titles = __sel(3), sel = games.filter(g => g._sel), bak = sel.map(g => g.description); sel.forEach(g => g.description = '');
+      await generateAIPost(); sel.forEach((g, i) => g.description = bak[i]);
+      const t = document.getElementById('out-text').innerText;
+      const pos = titles.map((s, i) => [t.indexOf(_displayTitle(s)), t.indexOf('ОПИС-' + (i + 1))]);
+      return { mapped: pos.every(([a, b], i) => a >= 0 && b > a && (i === pos.length - 1 || b < pos[i + 1][0])), pos,
+               status: document.getElementById('gen-status').textContent, toast: __toast() };
+    }, nq).then(r => Object.assign(r, { asked: (posted['/api/claude'] || []).length - nq }));
+  };
+  const a1 = await aiPost(JSON.stringify({ 2: 'ОПИС-2', 3: 'ОПИС-3', 1: 'ОПИС-1' }));
+  ok('Б-1 пост: описание от модели — под своей игрой', a1.asked === 1 && a1.mapped && /✅ Пост готов \(3 игр\)/.test(a1.toast), JSON.stringify(a1));
+  const a2 = await aiPost(JSON.stringify({ 1: 'ОПИС-1' }));
+  ok('Б-2 пост: потеряны ключи → «⚠️ … 2 игр без описания»', /⚠️ Пост готов, но 2 игр без описания/.test(a2.toast) && /без описания: 2/.test(a2.status), JSON.stringify(a2));
+  const a3 = await aiPost('Вот описания: не JSON');
+  ok('Б-2 пост: битый JSON → «⚠️ … 3 игр без описания»', /⚠️ Пост готов, но 3 игр без описания/.test(a3.toast), JSON.stringify(a3));
+  ok('Б-1 пост: заглушка Claude израсходована', claudeQ.length === 0, claudeQ.length + ' в очереди');
+  await p.keyboard.press('Escape');
+  ok('горячие клавиши: Esc закрывает пост', await p.evaluate(() => !document.getElementById('tg-modal').classList.contains('open')));
 
   ok('JS-ошибок нет', jsErr.length === 0, jsErr.slice(0, 5).join(' | '));
   const f = results.filter(r => !r.pass).length;
