@@ -23,6 +23,9 @@ const posted = {};
 const claudeQ = [];   // ответы-заглушки Claude по очереди (текст модели); очередь пуста — 500
 const igdbCover = []; // какие названия приложение искало в IGDB за HD-обложкой
 let tgPostFail = false; // /api/tg-post отвечает как упавший nginx: 502 и HTML вместо JSON
+let tgPostFmt = null;   // /api/tg-post сообщает, каким parse_mode ушёл пост (новый бэкенд — 'html'; старый поля не знает)
+// Проверка, которую нельзя провести на текущем каталоге (нет двойников PS4/PS5) — не FAIL, а пропуск с причиной
+const skipped = []; const skip = (name, why) => { skipped.push(name); console.log('SKIP ' + name + ' — ' + why); };
 
 const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); fs.createReadStream(SRC).pipe(s); }).listen(PORT);
 
@@ -54,9 +57,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       // Проверки Б-1/Б-2 кладут в claudeQ ответ модели на один запрос.
       if (pth === '/api/claude') {
         if (!claudeQ.length) return r.respond({ status: 500, headers: CORS, contentType: 'application/json', body: '{"error":"stub"}' });
-        return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ content: [{ type: 'text', text: claudeQ.shift() }] }) });
+        const it = claudeQ.shift(), text = typeof it === 'function' ? it(JSON.parse(r.postData() || '{}')) : it; // функция — ответ по тексту запроса
+        return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ content: [{ type: 'text', text }] }) });
       }
-      return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify({ ok: true, draftId: 'stand1' }) });
+      return r.respond({ status: 200, headers: CORS, contentType: 'application/json', body: JSON.stringify(Object.assign({ ok: true, draftId: 'stand1' }, pth === '/api/tg-post' && tgPostFmt ? { format: tgPostFmt } : {})) });
     }
     r.continue();
   });
@@ -85,7 +89,20 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     let n = 0; window.__slowImg = (c, ms) => `https://api.poigraem.shop/stand-img/${c}?ms=${ms}&n=${++n}`;
     window.__col = im => ((im && im.src || '').match(/stand-img\/(\w+)/) || [])[1] || null; // цвет заглушки в imgEl
     window.__wait = ms => new Promise(r => setTimeout(r, ms));
+    // Своя реализация normalizeKey магазина (js/utils.js:287) — эталон, с которым сверяется копия в приложении
+    window.__nk = s => String(s || '').replace(/[‘’‚‛′‵`]/g, "'").replace(/[™®©]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    window.__enc = s => encodeURIComponent(s).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+    // Двойники из живого каталога: группы игр с одним названием и разными платформами (у каждой цена и описание).
+    // Без хардкода конкретных игр — каталог меняется раз в две недели. __tw — первая пара, __tw2 — вторая (если есть)
+    window.__twGroups = () => { const by = {}; games.forEach(g => { if (!g._custom && g.id != null && g._platform && g.priceRUB && g.description) (by[__nk(_displayTitle(g.title))] = by[__nk(_displayTitle(g.title))] || []).push(g); });
+      return Object.values(by).map(l => l.filter((g, i) => l.findIndex(x => x._platform === g._platform) === i)).filter(l => l.length > 1).map(l => l.slice(0, 2)); };
   });
+  // Пары двойников живого каталога: от них зависят проверки ссылок t/p, метки платформы, QR и батча
+  const twN = await p.evaluate(() => { const gr = __twGroups(); window.__tw = gr[0] || []; window.__tw2 = gr[1] || []; return gr.length; });
+  const TW = twN > 0;
+  if (!TW) console.log('ВНИМАНИЕ: в каталоге нет двойников PS4/PS5 — проверки с двойниками будут пропущены');
+  // jsQR — декодер QR в странице: сверяем, что код на картинке читается и ведёт ровно туда, куда ссылка в посте
+  await p.addScriptTag({ content: fs.readFileSync(require.resolve('jsqr/dist/jsQR.js'), 'utf8') });
   const shot = async (id, name) => { const b64 = await p.evaluate(id => document.getElementById(id).toDataURL('image/png').split(',')[1], id); fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(b64, 'base64')); };
   const saveDl = async name => { const b64 = await p.evaluate(() => __dl[0] && __dl[0].href.split(',')[1]); if (b64) fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(b64, 'base64')); };
 
@@ -101,6 +118,38 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   // ответ модели строкой — не описания по буквам
   const abi = await p.evaluate(() => JSON.stringify([_aiByIndex('Отличная игра'), _aiByIndex(['a', 'b']), _aiByIndex(null)]));
   ok('_aiByIndex: строка → пусто, массив → нумерация с 1', abi === '[{},{"1":"a","2":"b"},{}]', abi);
+  // Ссылка на игру переживает замену каталога: кроме id — t (normalizeKey названия, как js/utils.js:287 магазина) и p (платформа)
+  const nk = await p.evaluate(() => typeof _normKey === 'function' ? ['Gran Turismo™ 7 ', 'Tony Hawk’s™ Pro   Skater', 'DOOM 3: VR Edition', 'It`s ‘X’'].map(_normKey) : null);
+  ok('normalizeKey как в магазине: ™®© прочь, кривые апострофы → \', пробелы схлопнуты, нижний регистр',
+    JSON.stringify(nk) === JSON.stringify(['gran turismo 7', "tony hawk's pro skater", 'doom 3: vr edition', "it's 'x'"]), JSON.stringify(nk));
+  if (TW) {
+    const gu = await p.evaluate(() => __tw.map(g => {
+      const u = new URL(_stGameUrl(g)); return { id: String(g.id), game: u.searchParams.get('game'), t: u.searchParams.get('t'), p: u.searchParams.get('p'), plat: g._platform, nk: __nk(g.title), raw: _stGameUrl(g) }; }));
+    ok('ссылка на игру: ?game=<id>&t=<normalizeKey>&p=<платформа> (пара двойников из каталога)', gu.length === 2 && gu.every(x => x.game === x.id && x.t === x.nk && x.p === x.plat)
+      && gu[0].p !== gu[1].p && gu[0].t === gu[1].t && gu.every(x => !/[()' ]/.test(x.raw)), JSON.stringify(gu.map(x => x.raw)));
+  } else skip('ссылка на игру у пары двойников', 'нет двойников');
+  // По всему каталогу: t — эталонный normalizeKey (__nk, не копия приложения), ( ) ' и пробел закодированы — иначе Markdown-ссылка [..](url) рвётся на «)»
+  const guAll = await p.evaluate(() => games.filter(g => g.id != null).map(g => { const raw = _stGameUrl(g), u = new URL(raw);
+    return (u.searchParams.get('t') === __nk(g.title) && u.searchParams.get('p') === (g._platform || null) && !/[()' ]/.test(raw)) ? null : raw; }).filter(Boolean));
+  ok('ссылки всего каталога: t и p раскодируются верно, ( ) \' и пробел закодированы', guAll.length === 0, guAll.slice(0, 3).join(' | '));
+  // Ссылка не берётся из чужого поля url (оно может прийти в снапшоте); готовый ключ сервера g.key — берётся; кэш адреса сбрасывается при смене данных
+  const gk = await p.evaluate(() => {
+    const src = games.find(g => g.id != null && !g._custom), g = { ...src, url: 'https://evil.example/' };
+    const a = _stGameUrl(g); const k = { ...src, key: 'ключ сервера' }; const b = _stGameUrl(k);
+    const c = { ...src }; const c1 = _stGameUrl(c); c.id = 'NEWID'; const c2 = _stGameUrl(c);
+    return { a, b, c1, c2, src: _stGameUrl(src) };
+  });
+  ok('ссылка: поле url игры не подменяет адрес, g.key сервера идёт в t, кэш сбрасывается при смене id',
+    gk.a === gk.src && gk.a.startsWith('https://poigraem.shop/?game=') && /[?&]t=%D0%BA%D0%BB%D1%8E%D1%87%20%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%D0%B0(&|$)/.test(gk.b)
+    && gk.c1 === gk.src && /[?&]game=NEWID&/.test(gk.c2), JSON.stringify(gk));
+  // Markdown для канала (пока сервер не подтвердил HTML): текст экранирован, [ ] в метке — круглые, «)» и пробел в адресе закодированы;
+  // _mdLinksToHtml экранирует кавычку в href
+  const mdq = await p.evaluate(() => {
+    const d = document.createElement('div'); d.innerHTML = '<a href="https://x.example/?a=1&amp;b=(2) 3">Игра [X]_y</a> текст_с*звёздой';
+    return { md: typeof _escMd === 'function' ? _outSerialize('md', d) : null, html: _mdLinksToHtml('[x](https://a.example/?q="y)') };
+  });
+  ok('Markdown для канала: экранирование текста, [ ] в метке, «)» и пробел в адресе; кавычка в href из шапки',
+    mdq.md === '[Игра (X)_y](https://x.example/?a=1&b=%282%29%203) текст\\_с\\*звёздой' && mdq.html.includes('href="https://a.example/?q=&quot;y"'), JSON.stringify(mdq));
 
   // ── Сторис ─────────────────────────────────────────────────
   await p.evaluate(() => __sel(6)); await p.evaluate(() => openStory());
@@ -437,7 +486,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
 
   // ── «📤 Отправить в канал» ───────────────────────────────
   // Публикация необратима: первый клик только взводит кнопку, второй шлёт ровно один запрос.
-  // /api/tg-post отправляет с parse_mode Markdown — значит в теле [название](url), а не HTML.
+  // Пока сервер не подтвердил HTML (TG_POST_HTML = false) — legacy Markdown без format, ссылки игр с t и p.
   await p.evaluate(() => sendPostToTG()); await sleep(500);
   const armed = (posted['/api/tg-post'] || []).length;
   await p.evaluate(() => sendPostToTG()); await sleep(1500);
@@ -445,17 +494,42 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('📤 в канал: первый клик взводит, второй шлёт ровно один запрос', armed === 0 && tp.length === 1, `${armed} → ${tp.length}`);
   if (tp[0]) {
     const b = JSON.parse(tp[0]);
-    ok('📤 в канал: Markdown со ссылками ?game=, без HTML-тегов', /\]\(https:\/\/poigraem\.shop\/\?game=/.test(b.text) && !/<\/?[a-z][^>]*>/i.test(b.text), b.text.slice(0, 160));
+    const mdLinks = (b.text.match(/\]\(https:\/\/poigraem\.shop\/\?game=[^)\s]*\)/g) || []);
+    ok('📤 в канал (HTML не включён): Markdown без format, ссылки ?game=&t=, без HTML-тегов и служебной разметки',
+      b.format === undefined && mdLinks.length > 0 && mdLinks.every(l => /^\]\(https:\/\/poigraem\.shop\/\?game=[^&)]+&t=[^&)\s]+(&p=[^&)\s]+)?\)$/.test(l))
+      && !/<\/?[a-z][^>]*>/i.test(b.text) && !/🔄|class=|data-gi/.test(b.text), JSON.stringify({ format: b.format, link: mdLinks[0], head: b.text.slice(0, 160) }));
     fs.writeFileSync(path.join(OUT, 'tg-post-body.md'), b.text);
   }
   ok('📤 в канал: тост об успехе', /Пост отправлен в канал/.test(await p.evaluate(() => __toast())), await p.evaluate(() => __toast()));
+
+  // HTML включён (TG_POST_HTML = true): format:'html'; сервер не подтвердил формат — громкое предупреждение, подтвердил — обычный успех.
+  // Дальше стенд работает в этом режиме — так будет после подтверждения сервера.
+  const fmtCase = async fmt => { tgPostFmt = fmt; const n0 = (posted['/api/tg-post'] || []).length;
+    await p.evaluate(() => { TG_POST_HTML = true; _tgDisarmSend(); sendPostToTG(); return sendPostToTG(); }); await sleep(800);
+    return { n: (posted['/api/tg-post'] || []).length - n0, toast: await p.evaluate(() => __toast()) }; };
+  const fNo = await fmtCase(null), fOk = await fmtCase('html');
+  ok('📤 в канал (HTML): сервер без format → предупреждение «не HTML», с format html → обычный успех',
+    fNo.n === 1 && /Сервер отправил не HTML/.test(fNo.toast) && fOk.n === 1 && /^✅ Пост отправлен в канал/.test(fOk.toast), JSON.stringify({ fNo, fOk }));
+  const tpH = (posted['/api/tg-post'] || []).slice(-1);
+  if (tpH[0]) {
+    const b = JSON.parse(tpH[0]);
+    const tags = [...new Set((b.text.match(/<\/?([a-z-]+)/gi) || []).map(t => t.replace(/[<\/]/g, '').toLowerCase()))];
+    const allowed = ['b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'a', 'code', 'pre', 'blockquote', 'tg-spoiler'];
+    const bare = b.text.replace(/<[^>]+>/g, '').match(/[<>]|&(?!(amp|lt|gt|quot|#\d+);)/g);
+    const hrefs = (b.text.match(/<a href="[^"]*">/g) || []).filter(h => h.includes('?game=')); // ссылки игр; шапка и подвал — свои
+    ok('📤 в канал: format html, теги Telegram, ссылки ?game=&amp;t=, нет неэкранированных & < > и служебной разметки',
+      b.format === 'html' && tags.every(t => allowed.includes(t)) && hrefs.length > 0 && hrefs.every(h => /^<a href="https:\/\/poigraem\.shop\/\?game=[^"&]+&amp;t=[^"&]+(&amp;p=[^"&]+)?">$/.test(h))
+      && !bare && !/🔄|class=|data-gi|contenteditable/.test(b.text),
+      JSON.stringify({ format: b.format, tags, bare, href: hrefs[0], head: b.text.slice(0, 120) }));
+    fs.writeFileSync(path.join(OUT, 'tg-post-body.html'), b.text);
+  }
 
   // Лимит Telegram — по видимому тексту: адреса ссылок в 1024 подписи не входят (как у «🕐 В очередь бота»)
   const lim = await p.evaluate(() => {
     const box = document.getElementById('out-text'), bak = { html: box.innerHTML, img: _ccPostImg };
     _ccPostImg = 'data:image/jpeg;base64,AAAA';
     box.innerHTML = Array.from({ length: 10 }, (_, i) => `<a href="https://poigraem.shop/?game=1234567890123456${i}">Игра номер ${i}</a> ` + 'о'.repeat(70)).join('<br>');
-    _updateOutCount(); const cnt = document.getElementById('out-count').textContent, vis = _outSerialize('visible').length, md = _outSerialize('md').length;
+    _updateOutCount(); const cnt = document.getElementById('out-count').textContent, vis = _outSerialize('visible').length, md = _outSerialize('html').length;
     _tgDisarmSend(); sendPostToTG(); const armed = _tgSendArmed; _tgDisarmSend();
     box.innerHTML = bak.html; _ccPostImg = bak.img; _updateOutCount();
     return { vis, md, cnt, armed };
@@ -526,7 +600,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     let clip = null; window.ClipboardItem = class { constructor(o) { this.o = o; } };
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write: async items => { clip = items[0].o; }, writeText: async t => { clip = { 'text/plain': new Blob([t]) }; } } });
     copyOut(); await new Promise(r => setTimeout(r, 200));
-    const res = {}; for (const m of ['plain', 'visible', 'html', 'md', 'mdraw']) res[m] = _outSerialize(m);
+    const res = {}; for (const m of ['plain', 'visible', 'html', 'mdraw']) res[m] = _outSerialize(m);
     if (clip) { res.clipPlain = await clip['text/plain'].text(); res.clipHtml = clip['text/html'] ? await clip['text/html'].text() : ''; }
     _updateOutCount(); res.count = document.getElementById('out-count').textContent; res.bot = _ccPostBot;
     _tgDisarmSend(); await queuePostToBot(); sendPostToTG(); await sendPostToTG();
@@ -547,14 +621,39 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('🔄 игры: стёртый абзац → предупреждение, текст не тронут', gone.same && /не найден/.test(gone.toast) && nClaude() === nq, JSON.stringify(gone));
 
   // «✂️ Сжать ИИ» пересобирает текст — кнопки 🔄 возвращаются и работают
-  const md = await p.evaluate(async () => { __sel(3); await generateAIPost(); return _outSerialize('mdraw'); });
-  claudeQ.push(md.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО'));
+  await p.evaluate(async () => { __sel(3); await generateAIPost(); });
+  // Модель «сжимает» ровно то, что ей прислали: адреса ссылок она видеть не должна (метки L1…), а в посте они восстанавливаются точно
+  let shPrompt = '';
+  claudeQ.push(body => { shPrompt = body.messages[0].content; return shPrompt.slice(shPrompt.indexOf('Пост:\n') + 6).replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО'); });
   nq = nClaude();
   const sh = await p.evaluate(async () => { await aiShrinkPost(); const box = document.getElementById('out-text');
-    return { btns: box.querySelectorAll('.cc-regen').length, descs: box.querySelectorAll('.cc-desc').length, t: box.innerText.slice(0, 300) }; });
+    const want = _ccPostGames.map(g => _stGameUrl(g)), got = [...box.querySelectorAll('a')].map(a => a.getAttribute('href'));
+    return { btns: box.querySelectorAll('.cc-regen').length, descs: box.querySelectorAll('.cc-desc').length, hrefs: want.every(u => got.includes(u)), t: box.innerText.slice(0, 300) }; });
+  ok('«✂️ Сжать»: модель не видит адресов ссылок, адреса в посте восстановлены точно', shPrompt && !/poigraem\.shop|t\.me/.test(shPrompt) && /\]\(L1\)/.test(shPrompt) && sh.hrefs, JSON.stringify({ hrefs: sh.hrefs, prompt: shPrompt.slice(-200) }));
   claudeQ.push(JSON.stringify({ 1: 'ПОСЛЕ-СЖАТИЯ' }));
   const sh2 = await p.evaluate(async () => { const b = document.querySelector('#out-text .cc-regen'); if (b) await regenGameDesc(b); return document.getElementById('out-text').innerText.includes('ПОСЛЕ-СЖАТИЯ'); });
   ok('«✂️ Сжать» не теряет 🔄: кнопки на месте и работают', sh.btns === 3 && sh.descs === 3 && sh2, JSON.stringify({ ...sh, regen: sh2 }));
+  claudeQ.length = 0;
+  // Модель пишет метки вольно — «(L 1)», «(l2)» — ссылки всё равно восстанавливаются; текст «[тут](подробнее)», набранный
+  // человеком, остаётся текстом (метки ставятся только настоящим <a>); потерянная ссылка или лишняя метка — пост не трогаем
+  const echo = f => body => f(body.messages[0].content.slice(body.messages[0].content.indexOf('Пост:\n') + 6));
+  const shCase = async (f, extra) => { claudeQ.push(echo(f)); return p.evaluate(async extra => {
+    __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    if (extra) box.appendChild(document.createTextNode(extra));
+    const want = _ccPostGames.map(g => _stGameUrl(g)), before = box.innerHTML; let err = 0;
+    const je = window.jError; window.jError = function (k) { if (k === 'shrink_links') err++; return je.apply(this, arguments); };
+    try { await aiShrinkPost(); } finally { window.jError = je; }
+    const hrefs = [...box.querySelectorAll('a')].map(a => a.getAttribute('href'));
+    return { same: box.innerHTML === before, links: want.every(u => hrefs.includes(u)), bad: hrefs.filter(h => /^L\d|^l\d|подробнее/.test(h)), txt: box.innerText.includes('[тут](подробнее)'),
+      left: /\(\s*[Ll]\s*\d+\s*\)/.test(box.innerText), err, toast: __toast() };
+  }, extra || ''); };
+  const shLoose = await shCase(t => t.replace('](L1)', '](L 1)').replace('](L2)', '](l2)'), ' [тут](подробнее)');
+  ok('«✂️ Сжать»: метки «(L 1)», «(l2)» восстанавливаются; набранный «[тут](подробнее)» остаётся текстом',
+    /Сжато/.test(shLoose.toast) && shLoose.links && !shLoose.bad.length && shLoose.txt && !shLoose.left && !shLoose.err, JSON.stringify(shLoose));
+  const shLost = await shCase(t => t.replace(/\[([^\]]+)\]\(L2\)/, '$1'));
+  const shExtra = await shCase(t => t + '\n[лишняя](L9)');
+  ok('«✂️ Сжать»: потерянная ссылка или чужая метка — предупреждение, пост не изменён, ошибка в журнал',
+    shLost.same && /потеряла ссылки/.test(shLost.toast) && shLost.err === 1 && shExtra.same && shExtra.err === 1, JSON.stringify({ shLost, shExtra }));
   claudeQ.length = 0;
 
   // Enter внутри описания делит абзац на части с одним data-gi — 🔄 заменяет его целиком, без хвоста старого текста;
@@ -603,12 +702,14 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
              table: badges.join() === want.join(), tags: tags.length === games.length && tags.every((t, i) => t === (twins.includes(games[i]) ? games[i]._platform : '')) };
   });
   ok('метка: в таблице плашка платформы у всех игр с платформой', pl.nPlat > 50 && pl.table, JSON.stringify({ nPlat: pl.nPlat, table: pl.table }));
-  ok('метка: двойник — та же игра под другой платформой (GT7, Bannerlord, BF2042, Medieval Dynasty)',
-    pl.tags && ['Gran Turismo 7', 'Mount & Blade II: Bannerlord', 'Battlefield 2042', 'Medieval Dynasty'].every(t => pl.twins.includes(t)), JSON.stringify(pl.twins));
+  // Метка ставится ровно тем, у кого в каталоге есть двойник (tags сверяет с независимым расчётом выше)
+  if (TW) ok('метка: двойник — та же игра под другой платформой', pl.tags && pl.twins.length > 0, JSON.stringify(pl.twins));
+  else skip('метка: двойник — та же игра под другой платформой', 'нет двойников');
 
+  if (!TW) skip('метка платформы в посте, сторис, QR, батче и коллаже (блок двойников)', 'нет двойников');
+  else {
   // Пост: метка ровно у двойников; переживает 🔄 одной игры и «Заново»; уходит в канал, очередь и копию
   const lab = await p.evaluate(() => {
-    window.__tw = games.filter(g => /^gran turismo/i.test(_displayTitle(g.title)) && g._platform && g.priceRUB);
     window.__single = games.find(g => g._platform && g.priceRUB && g.description && !games.some(x => x !== g && _displayTitle(x.title) === _displayTitle(g.title)));
     games.forEach(g => g._sel = false); [...__tw, __single].forEach(g => g._sel = true);
     window.__lab = g => `${_displayTitle(g.title)} (${g._platform})`;
@@ -618,7 +719,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     return { tw: __tw.every(g => t.includes(__lab(g))), single: t.includes(_displayTitle(__single.title)) && !t.includes(_displayTitle(__single.title) + ' (') }; });
   await p.evaluate(async () => { openTGPost(); await generateAIPost(); });
   const lp1 = await postHas();
-  ok('метка в посте: у двойников «Gran Turismo 7 (PS4)», у одиночки нет', lab.tw.length === 2 && lp1.tw && lp1.single, JSON.stringify({ ...lab, ...lp1 }));
+  ok('метка в посте: у двойников «Название (PS4)», у одиночки нет', lab.tw.length === 2 && lp1.tw && lp1.single, JSON.stringify({ ...lab, ...lp1 }));
   nq = nClaude(); claudeQ.push(JSON.stringify({ 1: 'ПЛАТ-ОДНА' }));
   await p.evaluate(async () => { await regenGameDesc(document.querySelector(`#out-text .cc-regen[data-gi="${_ccPostGames.indexOf(__tw[0])}"]`)); });
   const lp2 = await postHas(), oneBody = nClaude() > nq ? JSON.parse(posted['/api/claude'].slice(-1)[0]).messages[0].content : '';
@@ -632,6 +733,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const lo = await p.evaluate(async () => { const plain = _outSerialize('plain'); _tgDisarmSend(); await queuePostToBot(); sendPostToTG(); await sendPostToTG(); return plain; });
   const lq = JSON.parse((posted['/api/cc-queue'] || []).slice(nq)[0] || '{"text":""}').text, lt = JSON.parse((posted['/api/tg-post'] || []).slice(ntp)[0] || '{"text":""}').text;
   ok('метка в посте уходит в копию, очередь бота и канал', lab.tw.every(s => lo.includes(s) && lq.includes(s) && lt.includes(s)), JSON.stringify({ q: lq.slice(0, 120), tg: lt.slice(0, 120) }));
+  // Ссылки двойников различаются платформой: в HTML канала и очереди — &amp;p=, в копии — голый &p=
+  const twQ = await p.evaluate(() => __tw.map(g => ({ t: __enc(__nk(g.title)), pp: __enc(g._platform) })));
+  const twL = twQ.map(({ t, pp }) => ({ pp, tg: lt.includes(`&amp;t=${t}&amp;p=${pp}"`), q: lq.includes(`&amp;t=${t}&amp;p=${pp}"`), copy: lo.includes(`&t=${t}&p=${pp})`) }));
+  ok('ссылки двойников в посте различаются p= в канале, очереди и копии', twL.length === 2 && twL[0].pp !== twL[1].pp && twL.every(x => x.tg && x.q && x.copy), JSON.stringify(twL));
   await p.keyboard.press('Escape');
 
   // Название с меткой на картинке: не влезает — режется название, метка остаётся целой
@@ -648,7 +753,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   await p.evaluate(() => { window.__ft = []; const o = CanvasRenderingContext2D.prototype.fillText; window.__ftOrig = o;
     CanvasRenderingContext2D.prototype.fillText = function (s) { if (window.__ftOn) __ft.push(String(s)); return o.apply(this, arguments); }; });
   const drawn = (fn) => p.evaluate(fn => { __ft = []; __ftOn = true; try { (0, eval)(fn)(); } finally { __ftOn = false; } return __ft.slice(); }, fn.toString());
-  await p.evaluate(() => { games.forEach(g => g._sel = false); [...__tw, games.find(g => /bannerlord/i.test(g.title) && _platTag(g))].filter(Boolean).forEach(g => g._sel = true); openStory(); });
+  await p.evaluate(() => { games.forEach(g => g._sel = false); // третья игра — из второй пары двойников, иначе любая после пары (слот 0 обязан быть двойником)
+    [...__tw, __tw2[0] || games.slice(Math.max(...__tw.map(g => games.indexOf(g))) + 1).find(g => g.priceRUB && g.description)].filter(Boolean).forEach(g => g._sel = true); openStory(); });
   await sleep(8000);
   const stPl = [];
   for (const n of [1, 2, 3]) {
@@ -663,6 +769,59 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   }
   const stBad = stPl.filter(x => !(x.diff > 0 && x.tagged && !x.cut));
   ok('метка в сторис: у двойника во всех шаблонах n=1..3, цела, переключатель её убирает', stPl.length && !stBad.length, JSON.stringify(stBad.length ? stBad : stPl.length));
+  // QR со ссылкой t/p: декодируется (jsQR) и совпадает со ссылкой поста — у обоих двойников и у игры с самой длинной
+  // ссылкой каталога, на минимальном размере ST_QR_MIN. Плюс настоящий угловой код «Постера» из кадра 1080×1920.
+  // Шаблон, число игр и переключатель QR (с cc_qr_on) после проверки возвращаются как были — следующие проверки от неё не зависят
+  const qd = await p.evaluate(async () => {
+    const prev = { tpl: _stTplId, n: _stGameCount, on: _stQrOn, ls: localStorage.getItem('cc_qr_on') };
+    try {
+    const dec = (src, s) => { const k = document.createElement('canvas'); k.width = k.height = s; const x = k.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(src, 0, 0, s, s);
+      const r = jsQR(x.getImageData(0, 0, s, s).data, s, s); return r ? r.data : null; };
+    const longest = games.filter(g => g.id != null).sort((a, b) => _stGameUrl(b).length - _stGameUrl(a).length)[0];
+    const out = [];
+    for (const g of [...__tw, longest]) {
+      const u = _stGameUrl(g); await _stQrEnsure([g]); const rec = _stQrCache[_stQrSrc(u)];
+      out.push({ u, len: u.length, ok: !!(rec && rec.img) && dec(rec.img, ST_QR_MIN) === u });
+    }
+    // Слоты сторис несут title после _displayTitle и без _platform: их адрес обязан совпадать с адресом записи каталога
+    const post = g => _stGameUrl(games.find(x => x.id === g.id));
+    const slots = _stG.filter(g => g.id != null).map(g => ({ st: _stGameUrl(g), post: post(g) }));
+    // Угловой код в реальном кадре: главная игра — первый двойник
+    stSetGameCount(1); _stSetTpl('poster'); _stSetQrOn(true); await _stQrEnsure(_stG.slice(0, 1)); _stRenderTemplate();
+    const c = document.getElementById('st-canvas'), k = document.createElement('canvas'); k.width = Math.round(c.width * .35); k.height = Math.round(c.height * .3);
+    k.getContext('2d').drawImage(c, c.width - k.width, _stFloor(c.height) - k.height, k.width, k.height, 0, 0, k.width, k.height);
+    const r = jsQR(k.getContext('2d').getImageData(0, 0, k.width, k.height).data, k.width, k.height);
+    return { codes: out, slots, frame: { got: r ? r.data : null, want: post(_stG[0]) } };
+    } finally {
+      _stQrOn = prev.on; if (prev.ls === null) localStorage.removeItem('cc_qr_on'); else localStorage.setItem('cc_qr_on', prev.ls);
+      stSetGameCount(prev.n); _stSetTpl(prev.tpl); _stRenderTemplate();
+      window.__qrRestored = { tpl: _stTplId === prev.tpl, n: _stGameCount === prev.n, on: _stQrOn === prev.on, ls: localStorage.getItem('cc_qr_on') === prev.ls };
+    }
+  });
+  const qrR = await p.evaluate(() => window.__qrRestored);
+  ok('QR: ссылка t/p читается на ST_QR_MIN и совпадает со ссылкой поста (двойники, самая длинная ссылка, слоты и кадр «Постера»)',
+    qd.codes.length === 3 && qd.codes.every(x => x.ok) && /[?&]t=/.test(qd.codes[0].u) && /&p=/.test(qd.frame.want) && qd.frame.got === qd.frame.want
+    && qd.slots.length >= 2 && qd.slots.every(s => s.st === s.post), JSON.stringify(qd));
+  ok('QR-проверка вернула шаблон, число игр и переключатель QR', qrR && Object.values(qrR).every(Boolean), JSON.stringify(qrR));
+  // Каталог обновился и id сменились (замена каталога): открытая сторис пересчитывает адреса слотов, QR-элемент и подпись
+  const rl = await p.evaluate(async () => {
+    stSetGameCount(1); _stActiveSlot = 0; stAddQR(); await _stGenCaption();
+    const old = _stGameUrl(_stG[0]), oldId = _stG[0].id, bak = games;
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 7 } : g); // «новый импорт»: те же игры, новые id
+    const src = (typeof loadSnapshot === 'function' ? loadSnapshot.toString() : '');
+    if (typeof _stRelinkSlots === 'function') _stRelinkSlots();
+    const neu = _stGameUrl(_stG[0]), qr = _stEls.filter(e => e.type === 'qr').map(e => e.gameUrl);
+    const r = { old, neu, idNew: _stG[0].id === oldId + 7, qr, cap: _stCapText.includes(neu) && !_stCapText.includes(old), wired: /_stRelinkSlots\(\)/.test(src) };
+    games = bak; if (typeof _stRelinkSlots === 'function') _stRelinkSlots();
+    _stEls = _stEls.filter(e => e.type !== 'qr'); _stRenderTemplate();
+    r.back = _stGameUrl(_stG[0]) === old; return r;
+  });
+  ok('замена каталога: адрес слота, QR-элемент и подпись открытой сторис — по новому id, loadSnapshot это вызывает',
+    rl.neu !== rl.old && rl.idNew && rl.qr.length === 1 && rl.qr[0] === rl.neu && rl.cap && rl.wired && rl.back, JSON.stringify(rl));
+  // «]» в названии не обрывает ссылку в подписи к сторис
+  const brk = await p.evaluate(async () => { const t = _stG[0].title; _stG[0].title = 'Rayman [Legends]'; stSetGameCount(1); await _stGenCaption();
+    const cap = _stCapText, html = _mdLinksToHtml(cap); _stG[0].title = t; return { cap: cap.slice(0, 120), link: /<a href="https:\/\/poigraem\.shop\/\?game=[^"]+">[^<]*Rayman \(Legends\)/.test(html) }; });
+  ok('подпись к сторис: «[ ]» в названии не ломает ссылку', brk.link, JSON.stringify(brk));
   const stCap = await p.evaluate(async () => { stSetGameCount(2); await _stGenCaption(); return _stCapText; });
   ok('метка в тексте к сторис у двойников', lab.tw.every(s => stCap.includes(s)), stCap.slice(0, 160));
   // Короткие описания двойников не затирают друг друга (ключ — название с платформой)
@@ -671,8 +830,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('короткие описания двойников в сторис — у каждого своё', twD.join() === 'КОР-А,КОР-Б', JSON.stringify(twD));
   claudeQ.length = 0;
   // Батч: у двойников разные имена файлов
-  const twB = await p.evaluate(async () => { window.__dl = []; await downloadStoryBatch(); return __dl.map(d => d.name); });
-  ok('батч-сторис: у двойников разные имена файлов, с платформой', twB.length === 3 && new Set(twB).size === 3 && twB.some(n => /gran-turismo-7-ps4\.png$/.test(n)) && twB.some(n => /gran-turismo-7-ps4-ps5\.png$/.test(n)), JSON.stringify(twB));
+  const twB = await p.evaluate(async () => { window.__dl = []; await downloadStoryBatch(); return { names: __dl.map(d => d.name), sfx: __tw.map(g => '-' + g._platform.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.png') }; });
+  ok('батч-сторис: у двойников разные имена файлов, с платформой', twB.names.length === 3 && new Set(twB.names).size === 3 && twB.sfx.every(s => twB.names.some(n => n.endsWith(s))), JSON.stringify(twB));
   // Пресет бренда помнит переключатель метки
   const twP = await p.evaluate(() => { const pr = window.prompt; _stSetPlat(false); _collSetPlat(false); window.prompt = () => 'stand-plat'; brandSaveCurrent(); window.prompt = pr;
     _stSetPlat(true); _collSetPlat(true); brandApply('stand-plat'); const r = { st: _stPlatOn, cl: _collPlatOn };
@@ -692,7 +851,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       const b = __snap('coll-canvas'); const txt = __ft.slice(); _collSetPlat(false); const c = __snap('coll-canvas'); _collSetPlat(true);
       const res = { onOff: __diff(a, b), stable: __diff(a, c), tagged: txt.some(s => /\((PS4|PS5|PS4\/PS5)\)$/.test(s)) }; return res; });
   };
-  const cTw = await collPl(() => [...__tw, ...games.filter(g => /medieval dynasty/i.test(g.title) && _platTag(g))]);
+  const cTw = await collPl(() => [...__tw, ...__tw2]);
   await shot('coll-canvas', 'collage-plat-cards');
   await p.evaluate(() => closeCollage());
   const cSi = await collPl(() => games.filter(g => g._platform && g.priceRUB && !_platTag(g)).slice(0, 4));
@@ -700,6 +859,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('метка в коллаже: у двойника есть, переключатель убирает; у одиночек кадр не меняется',
     cTw.onOff > 0 && cTw.tagged && cTw.stable === 0 && cSi.onOff === 0 && cSi.stable === 0, JSON.stringify({ cTw, cSi }));
   await p.evaluate(() => { CanvasRenderingContext2D.prototype.fillText = __ftOrig; });
+  } // блок двойников
 
   // Переключатели переживают перезагрузку страницы и пишут событие в журнал
   await p.evaluate(() => { _stSetPlat(false); _collSetPlat(false); try { jFlush(); } catch (e) {} }); await sleep(1500);
@@ -716,6 +876,6 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
 
   ok('JS-ошибок нет', jsErr.length === 0, jsErr.slice(0, 5).join(' | '));
   const f = results.filter(r => !r.pass).length;
-  console.log(`\nИТОГ: ${results.length - f}/${results.length} PASS. Рендеры: ${OUT}`);
+  console.log(`\nИТОГ: ${results.length - f}/${results.length} PASS` + (skipped.length ? `, пропущено ${skipped.length} (нет данных в каталоге)` : '') + `. Рендеры: ${OUT}`);
   await br.close(); srv.close(); process.exit(f ? 1 : 0);
 })().catch(e => { console.error('STAND CRASH', e); srv.close(); process.exit(2); });

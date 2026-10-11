@@ -891,6 +891,7 @@ async function loadSnapshot() {
     if (ts) document.getElementById('snapshot-date').textContent = 'Обновлено: ' + new Date(ts).toLocaleString('ru', {day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     filtered = [...games];
     renderTable();
+    _stRelinkSlots(); // открытая сторис переживает обновление каталога: адреса, QR и подпись — по новым id
     document.getElementById('loading').style.display = 'none';
     document.getElementById('main').style.display = 'flex';
     jEvent('session_start', { games: games.length, custom: games.filter(g => g._custom).length });
@@ -1258,14 +1259,20 @@ function _renderPostImgBox(){
 // один и тот же DOM, просто сериализуют его по-разному. Названия игр внутри — настоящие <a href>
 // ссылки на карточки (CC-12): при копировании буфер несёт HTML (Telegram/большинство редакторов
 // при вставке rich-текста превращают <a> в кликабельную ссылку прямо в слове), плюс текстовый
-// фолбэк "Название (url)" для мест, куда HTML из буфера не долетает. При отправке через
-// /api/tg-post (parse_mode:'Markdown') та же разметка сериализуется в [текст](url).
+// фолбэк "Название (url)" для мест, куда HTML из буфера не долетает. В очередь бота уходит HTML с теми же
+// <a href>; в канал — HTML (format:'html') или legacy Markdown, пока сервер не подтвердил HTML (TG_POST_HTML).
 // Экранирование для legacy Markdown Телеграма: только _ * [ ` ломают парсинг
 function _escMd(s){ return String(s).replace(/([_*\[`])/g, '\\$1'); }
+// Внутри [..] legacy Markdown экранирования нет, а «]» обрывает ссылку — квадратные скобки меняем на круглые
+function _mdLabel(s){ return String(s).replace(/\[/g, '(').replace(/\]/g, ')'); }
+// Внутри (..) ссылку обрывают «)» и пробел — кодируем (адреса игр уже закодированы _urlPart, это для шапки/подвала)
+function _mdHref(s){ return String(s).replace(/[()\s]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')); }
 function _escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function _escAttr(s){ return _escHtml(s).replace(/"/g,'&quot;'); }
 // Поддержка Markdown-ссылок [текст](url) в шапке/подвале — превращаем в настоящий <a>, как у названий игр.
+// _escHtml уже прошёл по всей строке, поэтому в href остаётся только кавычка
 function _mdLinksToHtml(s){
-  return _escHtml(s).replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m,label,href)=>`<a href="${href}">${label}</a>`).replace(/\n/g,'<br>');
+  return _escHtml(s).replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m,label,href)=>`<a href="${href.replace(/"/g,'&quot;')}">${label}</a>`).replace(/\n/g,'<br>');
 }
 // Текстовый фолбэк тех же ссылок — как в _outSerialize('plain'): «Название (url)».
 // Нужен там, где HTML не доезжает (ВК, простая вставка), и для журнала.
@@ -1273,24 +1280,30 @@ function _mdLinksToPlain(s){
   return String(s).replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m,label,href)=>`${label} (${href})`);
 }
 // Сериализация текущего (возможно, отредактированного вручную) содержимого #out-text.
-// mode:'md' — для отправки в TG (parse_mode:'Markdown', спецсимволы экранированы);
-// mode:'mdraw' — те же [текст](url)-ссылки, но БЕЗ экранирования — для ИИ-сжатия (модели чистый текст);
+// mode:'html' — для канала и очереди бота (parse_mode HTML, текст и адреса экранированы);
+// mode:'md' — legacy Markdown для /api/tg-post без format (спецсимволы текста экранированы);
+// mode:'mdraw' — ссылки как [текст](url), без экранирования;
+// mode:'mdl' — для ИИ-сжатия: ссылки как [текст](L1), адреса складываются в urls (метки ставятся только на <a>,
+//   а текст вида «[тут](подробнее)» остаётся текстом);
+// mode:'visible' — то, что покажет Telegram (для лимита);
 // mode:'plain' — текстовый фолбэк буфера обмена (ссылка рядом со словом в скобках, без разметки).
 // root — другой корень вместо #out-text (снимок версии ИИ собирается во внеэкранном div).
 // Служебные элементы редактора (_OUT_UI: 🔄 у игры) не часть поста — их нет ни в одном режиме и в буфере (copyOut).
 const _OUT_UI = '.cc-regen';
-function _outSerialize(mode, root = document.getElementById('out-text')){
+function _outSerialize(mode, root = document.getElementById('out-text'), urls = []){
   if (!root) return '';
   let out = '';
   function walk(node){
-    if (node.nodeType===3){ out += mode==='md' ? _escMd(node.nodeValue) : mode==='html' ? _escHtml(node.nodeValue) : node.nodeValue; return; }
+    if (node.nodeType===3){ out += mode==='html' ? _escHtml(node.nodeValue) : mode==='md' ? _escMd(node.nodeValue) : node.nodeValue; return; }
     if (node.nodeType!==1) return;
     if (node.matches(_OUT_UI)) return;
     if (node.tagName==='A'){
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
-      out += mode==='md' ? `[${_escMd(label)}](${href})` : mode==='mdraw' ? `[${label}](${href})`
-        : mode==='html' ? `<a href="${_escHtml(href).replace(/"/g,'&quot;')}">${_escHtml(label)}</a>`
+      out += mode==='mdraw' ? `[${label}](${href})`
+        : mode==='mdl' ? `[${_mdLabel(label)}](L${urls.push(href)})`
+        : mode==='md' ? `[${_mdLabel(label)}](${_mdHref(href)})`
+        : mode==='html' ? `<a href="${_escAttr(href)}">${_escHtml(label)}</a>`
         : mode==='visible' ? label : `${label} (${href})`; // visible — то, что покажет Telegram: адрес ссылки в лимит не входит
       return;
     }
@@ -1396,7 +1409,7 @@ async function generateAIPost(opts = {}) {
       const dt = _pubTitle(g); // у двойника PS4/PS5 — с платформой: «Gran Turismo 7 (PS4)»
       const em = pickEmoji({title:_displayTitle(g.title),description:desc});
       const price = g.priceRUB.toLocaleString('ru');
-      const nameHtml = g.id!=null ? `<a href="${_stGameUrl(g)}">${_escHtml(dt)}</a>` : _escHtml(dt);
+      const nameHtml = g.id!=null ? `<a href="${esc(_stGameUrl(g))}">${_escHtml(dt)}</a>` : _escHtml(dt);
       lines.push(`${em} ${nameHtml} — ${price} руб.${_ccRegenHtml(i)}<br><span class="cc-desc" data-gi="${i}">${_escHtml(desc)}</span>`);
     });
     const headerHtml = _mdLinksToHtml(customHeader);
@@ -1614,23 +1627,41 @@ function _updateOutCount(){
 // сокращаются только описания. Ответ модели кладётся обратно в редактор (ссылки снова живые <a>).
 async function aiShrinkPost(){
   const btn = document.getElementById('out-shrink-btn');
-  const raw = _outSerialize('mdraw');
+  // Адреса ссылок (длинные, с t и p) модели не показываем: вместо них метки L1, L2… — модель не может их
+  // исказить (пробел вместо %20, потерянный &p= у двойника), а _outAttachRegen после сжатия находит ссылки по точному href.
+  // Метки ставит сериализатор только настоящим <a> — текст вида «[тут](подробнее)» в шапке остаётся текстом
+  const urls = [];
+  const raw = _outSerialize('mdl', document.getElementById('out-text'), urls);
   if (!raw) { showToast('Сначала собери пост'); return; }
   const lim = _tgLimit();
   const visBefore = _outSerialize('visible').length;
-  // Модель видит текст с адресами ссылок, а лимит считается по видимому — адреса добавляем к цели
+  // Модель видит текст с разметкой ссылок [..](Ln), а лимит считается по видимому — разметку добавляем к цели
   const target = Math.floor(lim * .93) + raw.length - visBefore;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Сжимаю...'; }
   try {
-    const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](url) сохрани ВСЕ до единой, URL не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
+    const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](L1) сохрани ВСЕ до единой, метку в скобках (L1, L2…) не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
     const resp = await fetch(API + '/api/claude', { method: 'POST', headers: _claudeHeaders(), body: JSON.stringify({ model: descModel, max_tokens: 3000, messages: [{ role: 'user', content: prompt }] }) });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     const text = data.content.map(c => c.text || '').join('').trim().replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '').trim();
     if (!text) throw new Error('пустой ответ модели');
+    // Обратно в <a> превращаются только метки L1…Ln (терпимо к «(L 1)», «(l1)», пробелам); прочие [..](..) — текст.
+    // Каждая ссылка обязана вернуться и ни одна метка не должна остаться — иначе в канал уехал бы href="L3"
+    // или пропала бы ссылка игры (а с ней 🔄). Тогда пост не трогаем.
+    const got = new Set(); let unknown = 0;
+    const html = _escHtml(text).replace(/\[([^\]\n]+)\]\(\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
+      if (urls[n - 1] === undefined) { unknown++; return m; }
+      got.add(+n); return `<a href="${_escAttr(urls[n - 1])}">${label}</a>`;
+    }).replace(/\n/g, '<br>');
+    const left = /\(\s*[Ll]\s*\d+\s*\)/.test(html.replace(/<[^>]*>/g, ''));
+    if (got.size !== urls.length || unknown || left) {
+      jError('shrink_links', 'ссылки не восстановлены', { model: descModel, want: urls.length, got: got.size, unknown, left, raw: text });
+      showToast(`⚠️ Модель потеряла ссылки (${got.size} из ${urls.length}) — пост не изменён, нажми ещё раз`);
+      return;
+    }
     _jPostEdited(); // правку человека фиксируем до того, как её затрёт сжатая версия
     _ccPostGen++;
-    document.getElementById('out-text').innerHTML = _mdLinksToHtml(text);
+    document.getElementById('out-text').innerHTML = html;
     _outAttachRegen();
     _tgDisarmSend(); _updateOutCount();
     const nowLen = _outSerialize('visible').length;
@@ -1653,8 +1684,12 @@ function _tgDisarmSend(){
   const btn = document.getElementById('send-tg-btn');
   if (btn) { btn.textContent = '📤 Отправить в канал'; btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = ''; }
 }
+// format:'html' — бэкенд шлёт с parse_mode HTML (poigraem-backend 02605d1), в ВК — HTML → текст; тот же
+// сериализатор, что у очереди бота. Включается, когда сервер подтвердит деплой: старый бэкенд format
+// не знает и опубликовал бы голые теги. До того — legacy Markdown, как раньше.
+let TG_POST_HTML = false;
 async function sendPostToTG(){
-  const sendText = _outSerialize('md');
+  const sendText = _outSerialize(TG_POST_HTML ? 'html' : 'md');
   if (!sendText) { showToast('Сначала собери пост'); return; }
   const len = _outSerialize('visible').length; // Telegram считает видимый текст, без адресов ссылок
   const lim = _tgLimit();
@@ -1685,10 +1720,13 @@ async function sendPostToTG(){
   try {
     const resp = await fetch(API + '/api/tg-post', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-      body: JSON.stringify(_ccPostImg ? { text: sendText, photo: _ccPostImg } : { text: sendText })
+      body: JSON.stringify(Object.assign({ text: sendText }, _ccPostImg ? { photo: _ccPostImg } : {}, TG_POST_HTML ? { format: 'html' } : {}))
     });
     const data = await resp.json().catch(() => ({})); // 502/504 от nginx приходят HTML-страницей
     if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+    // Сервер возвращает, каким parse_mode ушёл пост. Нет подтверждения HTML — пост мог уйти с голыми тегами
+    const fmtBad = TG_POST_HTML && data.format !== 'html';
+    if (fmtBad) jError('tg_post_format', 'сервер не подтвердил HTML', { format: data.format == null ? null : data.format });
     // Бэкенд после TG публикует пост в VK напрямую (вебхук на собственные сообщения бота не
     // приходит) и возвращает результат в data.vk — TG-успех не отменяется ошибкой VK.
     let msg = _ccPostImg ? '✅ Пост с картинкой отправлен в канал' : '✅ Пост отправлен в канал';
@@ -1698,6 +1736,7 @@ async function sendPostToTG(){
       else if (vk.ok && vk.skipped) msg += ' · ВК: пропущен (' + vk.skipped + ')';
       else msg += ' · ⚠️ ВК не опубликован: ' + (vk.error || 'ошибка');
     }
+    if (fmtBad) msg = '⚠️ Сервер отправил не HTML — проверь пост в канале и ВК. ' + msg;
     showToast(msg);
     // Единственный полностью замкнутый контур инструмента: здесь виден не только
     // экспорт, но и исход публикации (включая ВК). У скачанного PNG исхода нет.
@@ -2528,7 +2567,50 @@ let _stQrOn=localStorage.getItem('cc_qr_on')!=='0';
 const SHOP_URL='https://poigraem.shop';
 const _stQrCache={};   // src -> {img, st:'load'|'ok'|'err', p:Promise|null}
 const ST_QR_MIN=90;    // меньше ~90px в файле 1080×1920 телефон код не берёт — там QR не рисуем вовсе
-function _stGameUrl(g){ return (g&&g.id!=null)?`${SHOP_URL}/?game=${g.id}`:''; }
+// id меняется при каждой замене каталога, поэтому в ссылке ещё t и p: магазин (poigraem 9e25222) не нашёл id —
+// ищет по нормализованному названию и платформе. _normKey — точная копия normalizeKey магазина (js/utils.js:287),
+// title — как есть в снапшоте, не _displayTitle. ( ) ' и пробел кодируем: иначе Markdown-ссылка [..](url) рвётся на «)».
+function _normKey(s){ return String(s||'').replace(/[‘’‚‛′‵`]/g,"'").replace(/[™®©]/g,'').replace(/\s+/g,' ').trim().toLowerCase(); }
+function _urlPart(s){ return encodeURIComponent(s).replace(/[!'()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase()); }
+// Если сервер начнёт отдавать в снапшоте готовый ключ (g.key = normalizeKey магазина) — берём его, копия не нужна.
+function _gameKey(g){ return (typeof g.key==='string'&&g.key)?g.key:_normKey(g.title); }
+// Слоты сторис (_stG, батч) несут title уже после _displayTitle и без _platform — адрес им считается заранее
+// из записи каталога (своё поле _gameUrl, не url: поле url могло бы прийти в снапшоте и подменить ссылку),
+// иначе QR сторис расходился бы со ссылкой поста. У записи каталога адрес кэшируется — функция зовётся
+// на каждом кадре; ключ кэша из всех входных данных, поэтому смена id/названия/платформы его сбрасывает.
+function _stGameUrl(g){
+  if(!g) return '';
+  if(g._gameUrl!==undefined) return g._gameUrl;
+  if(g.id==null) return '';
+  const k=g.id+'|'+g.title+'|'+(g._platform||'')+'|'+(g.key||'');
+  if(g._urlK!==k){ g._urlK=k; g._urlC=`${SHOP_URL}/?game=${g.id}&t=${_urlPart(_gameKey(g))}`+(g._platform?`&p=${_urlPart(g._platform)}`:''); }
+  return g._urlC;
+}
+// Ключ сопоставления слота с каталогом после замены (id новые): название + платформа, как ищет магазин
+function _gameMatchKey(g){ return _gameKey(g)+'|'+(g._platform||''); }
+// Каталог обновлён (🔄 или замена с новыми id): адреса слотов открытой сторис, её QR-элементы и подпись
+// пересчитываются, иначе QR и текст в открытой сторис вели бы на старый id, а новый пост — на новый.
+function _stRelinkSlots(){
+  if(!_stG||!_stG.length) return;
+  const swap={};
+  _stG.forEach(s=>{
+    if(s.id==null||!s._mk) return;
+    const g=games.find(x=>!x._custom&&x.id===s.id)||games.find(x=>!x._custom&&x.id!=null&&_gameMatchKey(x)===s._mk);
+    if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
+    const u=_stGameUrl(g);
+    if(u!==s._gameUrl){ swap[s._gameUrl]=u; s.id=g.id; s._gameUrl=u; }
+  });
+  if(!Object.keys(swap).length) return;
+  (_stEls||[]).forEach(el=>{
+    if(el.type!=='qr'||!swap[el.gameUrl]) return;
+    el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
+  });
+  const re=s=>Object.entries(swap).reduce((t,[a,b])=>t.split(a).join(b),s||'');
+  _stCapText=re(_stCapText); _stCapBot=re(_stCapBot);
+  const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
+  jEvent('used',{feature:'storyRelink',n:Object.keys(swap).length});
+  if(document.getElementById('story-modal')?.classList.contains('open')) _stRenderTemplate();
+}
 function _stQrSrc(url){ return _safeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=6&data=${encodeURIComponent(url)}`); }
 function _stSetQrOn(v){ _stQrOn=v; localStorage.setItem('cc_qr_on',v?'1':'0'); jEvent('used',{feature:'qrOn',to:v}); _stRenderTemplate(); }
 function _stQrFits(size,sx){ return size>=ST_QR_MIN*sx; }
@@ -3568,7 +3650,7 @@ async function _stGenCaption(){
       const desc=g.description||genDescs.get(g)||'';
       const price=g.priceRUB?` — ${g.priceRUB.toLocaleString('ru')} руб.`:'';
       const url=_stGameUrl(g);
-      const name=url?`[${_stPub(g)}](${url})`:_stPub(g);
+      const name=url?`[${_mdLabel(_stPub(g))}](${url})`:_stPub(g); // «]» в названии оборвал бы ссылку
       return `${pickEmoji({title:g.title,description:desc})} ${name}${price}\n${desc}`.trim();
     });
     _stCapText=lines.join('\n\n');
@@ -3604,7 +3686,7 @@ function openStory(){
   if(!all.length){showToast('Выбери хотя бы 1 игру');return;}
   if(all.length>5)showToast('Для сторис доступны первые 5 игр (в кадре одновременно до 3)');
   const sel=all.slice(0,5);
-  _stG=sel.map(g=>({id:g.id,title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
+  _stG=sel.map(g=>({id:g.id,_gameUrl:_stGameUrl(g),_mk:g.id!=null?_gameMatchKey(g):null,title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom}));
   _stGameCount=1;_stEls=[];_stSel=-1;_stUndoStack=[];_stRedoStack=[];_stShortDescs={};_stCapText='';_stDescGame=0;
   _stShortDescsAI={};_stCapBot='';_jTplSwitches=0;
   jChainNew('story');
@@ -4196,7 +4278,7 @@ async function downloadStoryBatch(){
   try{
   await document.fonts.ready;
   for(const g of list){
-    const entry={id:g.id,title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
+    const entry={id:g.id,_gameUrl:_stGameUrl(g),title:_displayTitle(g.title),plat:_platTag(g),priceRUB:g.priceRUB,discount:g.discount||0,description:g.description||'',imgUrl:_safeImgUrl(_igdbOriginal(g.icon||g.featuredImg||null))||'',imgEl:null,transform:{ox:0,oy:0,scale:1},bg:'image',bgColor:'#1a1a2e',custom:!!g._custom};
     // CC-2: как в интерактивном openStory — тянем HD-обложку из IGDB, icon (440px) остаётся фолбэком.
     // Для своих товаров (custom) IGDB не дёргаем — там только игры, прилетит чужая обложка.
     const iconUrl=entry.imgUrl;
