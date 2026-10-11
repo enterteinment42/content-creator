@@ -486,8 +486,9 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
 
   // ── «📤 Отправить в канал» ───────────────────────────────
   // Публикация необратима: первый клик только взводит кнопку, второй шлёт ровно один запрос.
-  // Пока сервер не подтвердил HTML (TG_POST_HTML = false) — legacy Markdown без format, ссылки игр с t и p.
-  await p.evaluate(() => sendPostToTG()); await sleep(500);
+  // Откат (TG_POST_HTML = false) — legacy Markdown без format, ссылки игр с t и p. Сначала проверяем его.
+  ok('📤 в канал: по умолчанию включён HTML', await p.evaluate(() => TG_POST_HTML === true));
+  await p.evaluate(() => { TG_POST_HTML = false; sendPostToTG(); }); await sleep(500);
   const armed = (posted['/api/tg-post'] || []).length;
   await p.evaluate(() => sendPostToTG()); await sleep(1500);
   const tp = posted['/api/tg-post'] || [];
@@ -503,7 +504,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   ok('📤 в канал: тост об успехе', /Пост отправлен в канал/.test(await p.evaluate(() => __toast())), await p.evaluate(() => __toast()));
 
   // HTML включён (TG_POST_HTML = true): format:'html'; сервер не подтвердил формат — громкое предупреждение, подтвердил — обычный успех.
-  // Дальше стенд работает в этом режиме — так будет после подтверждения сервера.
+  // Дальше стенд работает в этом режиме — он и есть рабочий.
   const fmtCase = async fmt => { tgPostFmt = fmt; const n0 = (posted['/api/tg-post'] || []).length;
     await p.evaluate(() => { TG_POST_HTML = true; _tgDisarmSend(); sendPostToTG(); return sendPostToTG(); }); await sleep(800);
     return { n: (posted['/api/tg-post'] || []).length - n0, toast: await p.evaluate(() => __toast()) }; };

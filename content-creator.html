@@ -1686,9 +1686,9 @@ function _tgDisarmSend(){
   if (btn) { btn.textContent = '📤 Отправить в канал'; btn.style.background = ''; btn.style.borderColor = ''; btn.style.color = ''; }
 }
 // format:'html' — бэкенд шлёт с parse_mode HTML (poigraem-backend 02605d1), в ВК — HTML → текст; тот же
-// сериализатор, что у очереди бота. Включается, когда сервер подтвердит деплой: старый бэкенд format
-// не знает и опубликовал бы голые теги. До того — legacy Markdown, как раньше.
-let TG_POST_HTML = false;
+// сериализатор, что у очереди бота. Включено 12.10.2026: сервер подтвердил деплой 02605d1 и возвращает
+// format в ответе (24dd7d9). false — откат на legacy Markdown, если с сервером что-то случится.
+let TG_POST_HTML = true;
 async function sendPostToTG(){
   const sendText = _outSerialize(TG_POST_HTML ? 'html' : 'md');
   if (!sendText) { showToast('Сначала собери пост'); return; }
