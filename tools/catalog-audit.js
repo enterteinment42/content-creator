@@ -5,7 +5,7 @@
 // Запуск: node tools/catalog-audit.js   (зависимости — те же, что у стенда: cd tools && npm install)
 // Как и стенд, данные качает Chrome, а не node (node до api.poigraem.shop не достаёт), журнал и Claude — заглушки.
 // Обложки сверяются той же логикой, что HD-апгрейд сторис и коллажа (_hdCoverUrl): /igdb/cover по очищенному
-// названию, low-ответ принимается только через _lowMatchOk. Вкладку PS Store пикера аудит не трогает — там нужен админ-токен.
+// названию, ответ принимается тем же _hdAccept. Вкладку PS Store пикера аудит не трогает — там нужен админ-токен.
 const http = require('http'), fs = require('fs'), path = require('path'), os = require('os');
 const puppeteer = require('puppeteer-core');
 const SRC = process.env.STAND_SRC || path.join(__dirname, '..', 'content-creator.html');
@@ -93,7 +93,7 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       let hd = null;
       for (const q of [q1, (q2 && q2 !== q1) ? q2 : null]) {
         if (!q) continue; const j = await igdb(q); tries.push({ q, conf: j && j.confidence, matched: j && j.matched, error: j && j.error, cover: !!(j && j.cover) });
-        if (j && j.cover && j.confidence && (j.confidence !== 'low' || _lowMatchOk(q, j.matched))) { hd = { q, conf: j.confidence, matched: j.matched, cover: j.cover }; break; }
+        if (_hdAccept(q, j)) { hd ={ q, conf: j.confidence, matched: j.matched, cover: j.cover }; break; }
       }
       const w = await imgW(_safeImgUrl(_igdbOriginal(src)));
       // Чужая: HD принят, но найденная игра по словам не совпадает с нашей (лишние слова — другая игра/DLC/сборник)

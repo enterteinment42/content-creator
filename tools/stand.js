@@ -115,6 +115,19 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   const lm = await p.evaluate(() => [['Batman: Arkham Knight', 'Batman: Arkham Knight - Batman: Noel Skin'], ['UFC 6', 'EA Sports UFC 6'],
     ['Crash Bandicoot N. Sane Trilogy', 'Crash Bandicoot N. Sane Trilogy'], ['DOOM Soundtrack', 'DOOM Soundtrack Vol. 1'], ['Fallout 4', 'Fallout 4: Season Pass'], ['Game X', 'Game X Add-On: Y']].map(([q, m]) => _lowMatchOk(q, m)));
   ok('_lowMatchOk: дополнения не проходят, если их нет в запросе', lm.join() === 'false,true,true,true,false,false', lm.join());
+  // _hdAccept: ответы /igdb/cover, снятые живьём 14.10.2026 (The Forest, Poppy Playtime, Tony Hawk 1-4)
+  const ha = await p.evaluate(() => [
+    ['The Forest', 'medium', 'The Forest of Doom', false], ['Sons of the Forest', 'medium', 'Sons of the Forest', true],
+    ['Hogwarts Legacy', 'medium', 'Hogwarts Legacy Deluxe Edition', true], ['Poppy Playtime: Chapter 5', 'medium', 'Poppy Playtime: Chapter 5 - Broken Things', true],
+    ['Batman: Arkham Knight', 'medium', 'Batman: Arkham Knight - Batman: Noel Skin', false], ['Marvel\'s Spider-Man', 'high', 'Marvel\'s Spider-Man', true],
+    ['Poppy Playtime: Chapter 1', 'low', 'Poppy Playtime', true], ['Poppy Playtime: Chapter 2', 'low', 'Poppy Playtime', false],
+    [_cleanConsoleTitle("Tony Hawk's Pro Skater 1 - 4 - Standard Edition Bundle"), 'medium', "Tony Hawk's Pro Skater 1-4 Standard Edition Bundle", true],
+    ['SOULCALIBUR Ⅵ', 'medium', 'SoulCalibur VI', true], ['METAL GEAR SOLID Δ: SNAKE EATER', 'medium', 'Metal Gear Solid Delta: Snake Eater', true],
+    ['Grand Theft Auto V and Great White Shark Card Bundle', 'low', 'Grand Theft Auto V: Premium Edition & Great White Shark Card Bundle', true],
+    ['Gran Turismo 7', 'low', 'Gran Turismo™ 7', true], ['Minecraft', 'medium', 'Minecraft™ Dungeons', false],
+    ['The Witcher 3 Wild Hunt', 'medium', 'The Witcher 3 Wild Hunt Game of the Year Edition', true], ['Mass Effect', 'medium', 'Mass Effect Legendary Edition', true],
+  ].map(([q, c, m, want]) => ({ q, got: _hdAccept(q, { cover: 'x', confidence: c, matched: m }), want })));
+  ok('_hdAccept: продолжение названия и скин отсекаются, первая глава и «1 - 4» находятся', ha.every(x => x.got === x.want), JSON.stringify(ha.filter(x => x.got !== x.want)));
   // ответ модели строкой — не описания по буквам
   const abi = await p.evaluate(() => JSON.stringify([_aiByIndex('Отличная игра'), _aiByIndex(['a', 'b']), _aiByIndex(null)]));
   ok('_aiByIndex: строка → пусто, массив → нумерация с 1', abi === '[{},{"1":"a","2":"b"},{}]', abi);
@@ -672,6 +685,28 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     const a = document.createElement('a'); a.href = 'https://t.me/promo'; a.textContent = '[Акция] подписка'; box.prepend(a, document.createElement('br'));
     await aiShrinkPost(); const b = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === 'https://t.me/promo'); return { label: b ? b.textContent : null, toast: __toast() }; });
   ok('«✂️ Сжать»: «[Акция]» в ссылке шапки остаётся с квадратными скобками', shHd.label === '[Акция] подписка', JSON.stringify(shHd));
+  // Модель сократила текст такой ссылки — квадратные скобки всё равно возвращаются (раньше оставались круглые)
+  claudeQ.push(echo(t => t.replace(/ подписка\]/, ']')));
+  const shHd2 = await p.evaluate(async () => { __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    const a = document.createElement('a'); a.href = 'https://t.me/promo'; a.textContent = '[Акция] подписка'; box.prepend(a, document.createElement('br'));
+    await aiShrinkPost(); const b = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === 'https://t.me/promo'); return { label: b ? b.textContent : null, toast: __toast() }; });
+  ok('«✂️ Сжать»: модель сократила текст ссылки с «[ ]» — скобки остаются квадратными', shHd2.label === '[Акция]', JSON.stringify(shHd2));
+  // Набранная в редакторе [текст](https://…) уходит в канал и очередь ссылкой, в лимит — только текст
+  const typed = await p.evaluate(async () => { __sel(3); const box = document.getElementById('out-text');
+    const tn = box.appendChild(document.createTextNode(' Жми [подробнее](https://t.me/x?a=1&b=2) и [тут](подробнее) <b>'));
+    // та же ссылка, разбитая жирным словом внутри
+    const sp = document.createElement('span'); sp.innerHTML = ' [<b>жирно</b>](https://t.me/y)'; box.appendChild(sp);
+    let clip = null; window.ClipboardItem = class { constructor(o) { this.o = o; } };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { write: async items => { clip = items[0].o; }, writeText: async () => {} } });
+    copyOut(); await new Promise(r => setTimeout(r, 200));
+    const r = { html: _outSerialize('html'), md: _outSerialize('md'), vis: _outSerialize('visible'), plain: _outSerialize('plain'), mdl: _outSerialize('mdl'), clip: clip ? await clip['text/html'].text() : '' };
+    tn.remove(); sp.remove(); return r; });
+  ok('набранная руками [текст](https://…): HTML и Markdown — ссылка, лимит — по тексту, буфер — «текст (адрес)»; «[тут](подробнее)» — текст',
+    typed.html.includes('<a href="https://t.me/x?a=1&amp;b=2">подробнее</a>') && typed.html.includes('[тут](подробнее) &lt;b&gt;')
+    && typed.md.includes('[подробнее](https://t.me/x?a=1&b=2)') && typed.md.includes('\\[тут](подробнее)')
+    && /Жми подробнее и/.test(typed.vis) && typed.plain.includes('подробнее (https://t.me/x?a=1&b=2)') && typed.mdl.includes('[подробнее](https://t.me/x?a=1&b=2)')
+    && typed.html.includes('<a href="https://t.me/y">жирно</a>') && typed.clip.includes('<a href="https://t.me/x?a=1&amp;b=2">подробнее</a>') && typed.clip.includes('<b>жирно</b>'),
+    JSON.stringify({ html: typed.html.slice(-160), md: typed.md.slice(-90), vis: typed.vis.slice(-40), clip: typed.clip.slice(-200) }));
   // Один хелпер процентного кодирования: ( ) ' пробел — как раньше; многобайтный пробел кодируется в UTF-8, а не «%2003»
   const enc = await p.evaluate(() => ({ md: _mdHref('https://a.b/x (1)'), em: _mdHref('a b'), up: _urlPart("a'b (c)*") }));
   ok('кодирование адресов: _mdHref и _urlPart, многобайтный пробел в UTF-8', enc.md === 'https://a.b/x%20%281%29' && enc.em === 'a%E2%80%83b' && enc.up === 'a%27b%20%28c%29%2A', JSON.stringify(enc));
@@ -867,11 +902,45 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   });
   ok('замена каталога: из дублей с той же платформой берётся тот, что с той же ценой; нет такого — слот не перецепляется, тост',
     rd.pick.id && rd.pick.price && rd.keep.id && rd.keep.price && /несколько/i.test(rd.keep.toast) && rd.back, JSON.stringify(rd));
+  // Режим элементов: при замене каталога цена и скидка слота тоже новые (раньше — только QR), и снимки Ctrl+Z / Ctrl+Y
+  // перецепляются вместе с ними; цену, переписанную руками, не трогаем — тост
+  const re = await p.evaluate(async () => {
+    stSetGameCount(1); _stSetMode('templates'); const bak = games, s = _stG[0], d0 = s.discount, cf = window.confirm; window.confirm = () => true;
+    s.discount = 40; _stTemplateToEditor(); window.confirm = cf;
+    const pick = t => _stEls.find(e => e.type === t), p0 = s.priceRUB;
+    _stSnapshot(); pick('price').x += 10; // правка после снимка — Ctrl+Z вернёт снимок
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 5, priceRUB: g.priceRUB ? g.priceRUB + 100 : g.priceRUB, discount: _gameMatchKey(g) === s._mk ? 25 : g.discount } : g);
+    _stRelinkSlots();
+    const u = _stGameUrl(s), live = { price: pick('price').text, st: pick('sticker')?.text, qr: pick('qr')?.gameUrl === u, gu: pick('price')._gu === u };
+    stUndo(); await new Promise(r => setTimeout(r, 1500));
+    const undo = { price: pick('price').text, st: pick('sticker')?.text, qr: pick('qr')?.gameUrl === u, img: !!pick('qr')?.imgEl, x: pick('price').x };
+    pick('price').text = 'ХИТ';
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 5, priceRUB: g.priceRUB ? g.priceRUB + 100 : g.priceRUB } : g);
+    _stRelinkSlots(); const hand = { price: pick('price').text, toast: __toast() };
+    games = bak; s.discount = d0; _stRelinkSlots(); _stSetMode('templates'); _stEls = []; _stUndoStack = []; _stRedoStack = []; _stRenderTemplate();
+    return { want: _stPriceTxt(p0 + 100), live, undo, hand };
+  });
+  ok('режим элементов: замена каталога меняет цену, скидку и QR элементов, в том числе в снимках Ctrl+Z; правленую цену не трогает',
+    re.live.price === re.want && re.live.st === '-25%' && re.live.qr && re.live.gu && re.undo.price === re.want && re.undo.st === '-25%' && re.undo.qr && re.undo.img
+    && re.hand.price === 'ХИТ' && /правили вручную/.test(re.hand.toast), JSON.stringify(re));
+  // Бейдж скидки в узкой мини-карточке («Диагональ», «Герой») не налезает на цену
+  const bdg = await p.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = STORY_W; c.height = STORY_H; const ctx = c.getContext('2d'), rr = [], ft = [];
+    const oR = ctx.roundRect.bind(ctx), oF = ctx.fillText.bind(ctx);
+    ctx.roundRect = (x, y, w, h, r) => { rr.push({ x, y, w, h }); return oR(x, y, w, h, r); };
+    ctx.fillText = (t, x, y) => { if (/₽/.test(t)) ft.push({ x, y, r: x + ctx.measureText(t).width }); return oF(t, x, y); };
+    const g = { title: 'Игра', priceRUB: 12990, discount: 50, imgEl: null, transform: { ox: 0, oy: 0, scale: 1 }, bg: 'color', bgColor: '#123' };
+    const res = [224, 1080].map(w => { rr.length = 0; ft.length = 0; _stDrawCoverCard(ctx, 0, 0, w, 288, g);
+      const b = rr[rr.length - 1], pr = ft[0]; return { w, over: !!(b && pr && b.x < pr.r && b.y < pr.y + 52 && b.y + b.h > pr.y), b, pr }; });
+    return res;
+  });
+  ok('бейдж скидки в мини-карточке не налезает на цену', bdg.every(x => x.b && x.pr && !x.over), JSON.stringify(bdg));
   // «]» в названии не обрывает ссылку в подписи к сторис
   const brk = await p.evaluate(async () => { const t = _stG[0].title; _stG[0].title = 'Rayman [Legends]'; stSetGameCount(1); await _stGenCaption();
     const cap = _stCapText, html = _mdLinksToHtml(cap); _stG[0].title = t; return { cap: cap.slice(0, 120), link: /<a href="https:\/\/poigraem\.shop\/\?game=[^"]+">[^<]*Rayman \(Legends\)/.test(html) }; });
   ok('подпись к сторис: «[ ]» в названии не ломает ссылку', brk.link, JSON.stringify(brk));
-  const stCap = await p.evaluate(async () => { stSetGameCount(2); await _stGenCaption(); return _stCapText; });
+  // Все три слота: порядок слотов — порядок каталога, и игра второй группы двойников может встать между двойниками
+  const stCap = await p.evaluate(async () => { stSetGameCount(3); await _stGenCaption(); return _stCapText; });
   ok('метка в тексте к сторис у двойников', lab.tw.every(s => stCap.includes(s)), stCap.slice(0, 160));
   // Короткие описания двойников не затирают друг друга (ключ — название с платформой)
   claudeQ.push(JSON.stringify({ 1: 'КОР-А', 2: 'КОР-Б' }));

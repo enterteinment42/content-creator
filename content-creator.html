@@ -1266,6 +1266,9 @@ function _renderPostImgBox(){
 function _escMd(s){ return String(s).replace(/([_*\[`])/g, '\\$1'); }
 // Внутри [..] legacy Markdown экранирования нет, а «]» обрывает ссылку — квадратные скобки меняем на круглые
 function _mdLabel(s){ return String(s).replace(/\[/g, '(').replace(/\]/g, ')'); }
+// Для ИИ-сжатия — широкие «［ ］»: ссылку не обрывают, а обратно однозначно превращаются в «[ ]» (круглые из _mdLabel
+// путались бы со своими круглыми текста, и сокращённая моделью «[Акция] подписка» оставалась бы «(Акция)»)
+function _mdlLabel(s){ return String(s).replace(/\[/g, '［').replace(/\]/g, '］'); }
 // Процентное кодирование выбранных символов: то, что кодирует encodeURIComponent (пробелы, в т.ч. многобайтные), —
 // им, в UTF-8; остальное (( ) ' ! * он не трогает) — %XX. Общий хелпер для _mdHref и _urlPart
 function _pctEnc(s, rx){ return String(s).replace(rx, c => { const e = encodeURIComponent(c); return e !== c ? e : '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'); }); }
@@ -1293,30 +1296,54 @@ function _mdLinksToPlain(s){
 // root — другой корень вместо #out-text (снимок версии ИИ собирается во внеэкранном div).
 // Служебные элементы редактора (_OUT_UI: 🔄 у игры) не часть поста — их нет ни в одном режиме и в буфере (copyOut).
 const _OUT_UI = '.cc-regen';
+// Ссылка, набранная в редакторе руками: [текст](https://…). Только http(s) — «[тут](подробнее)» остаётся текстом
+const _OUT_TYPED_LINK = /\[([^\[\]\n<]+)\]\((https?:\/\/[^\s)]+)\)/g;
+// Текстовый узел поста: набранные руками ссылки становятся ссылками там, где у <a> — тоже ссылки (канал, очередь,
+// лимит по видимому тексту, текстовый буфер). 'mdl' и 'mdraw' — как есть: «Сжать» восстанавливает их сам
+function _outText(s, mode){
+  const keep = mode==='mdl' || mode==='mdraw';
+  const txt = t => mode==='html' ? _escHtml(t) : mode==='md' ? _escMd(t) : t;
+  if (keep) return s;
+  let out = '', i = 0;
+  for (const m of s.matchAll(_OUT_TYPED_LINK)) {
+    const [all, label, href] = m;
+    out += txt(s.slice(i, m.index)) + (mode==='html' ? `<a href="${esc(href)}">${_escHtml(label)}</a>`
+      : mode==='md' ? `[${_mdLabel(label)}](${_mdHref(href)})`
+      : mode==='visible' ? label : `${label} (${href})`);
+    i = m.index + all.length;
+  }
+  return out + txt(s.slice(i));
+}
 function _outSerialize(mode, root = document.getElementById('out-text'), urls = []){
   if (!root) return '';
-  let out = '';
+  let out = '', buf = '';
+  // Текст копится до ссылки, переноса или абзаца: набранная [текст](https://…) могла распасться на узлы
+  // (жирное слово внутри, вставка адреса) — _outText видит её целиком
+  const flush = () => { if (buf) { out += _outText(buf, mode); buf = ''; } };
   function walk(node){
-    if (node.nodeType===3){ out += mode==='html' ? _escHtml(node.nodeValue) : mode==='md' ? _escMd(node.nodeValue) : node.nodeValue; return; }
+    if (node.nodeType===3){ buf += node.nodeValue; return; }
     if (node.nodeType!==1) return;
     if (node.matches(_OUT_UI)) return;
+    const block = node.tagName==='DIV' || node.tagName==='P';
+    if (node.tagName==='A' || node.tagName==='BR' || block) flush(); // жирное/span внутри строки текст не рвёт
     if (node.tagName==='A'){
       const href = node.getAttribute('href')||'';
       const label = node.textContent;
       out += mode==='mdraw' ? `[${label}](${href})`
-        : mode==='mdl' ? `[${_mdLabel(label)}](@L${urls.push({ href, label })})`
+        : mode==='mdl' ? `[${_mdlLabel(label)}](@L${urls.push({ href, label })})`
         : mode==='md' ? `[${_mdLabel(label)}](${_mdHref(href)})`
         : mode==='html' ? `<a href="${esc(href)}">${_escHtml(label)}</a>`
         : mode==='visible' ? label : `${label} (${href})`; // visible — то, что покажет Telegram: адрес ссылки в лимит не входит
       return;
     }
     if (node.tagName==='BR'){ out += '\n'; return; }
-    const block = node.tagName==='DIV' || node.tagName==='P';
     if (block && out && !out.endsWith('\n')) out += '\n';
     node.childNodes.forEach(walk);
+    if (block) flush();
     if (block && !out.endsWith('\n')) out += '\n';
   }
   root.childNodes.forEach(walk);
+  flush();
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -1564,10 +1591,14 @@ function copyOut() {
   _jExported = true;
   jEvent('published', { kind: 'copy', mode: 'post', final: plain, len: plain.length,
     editSharePct: _ccPostBot ? jShare(_ccPostBot, plain) : null, aiPasses: _jAiPasses, decisionMin: _jMinutes() });
-  // HTML для буфера — без служебных 🔄 и разметки абзацев: только текст, <a> и переносы
+  // HTML для буфера — без служебных 🔄 и разметки абзацев (жирное и курсив человека остаются).
+  // Набранная руками [текст](https://…) и здесь становится ссылкой, как в канале (в пределах одного текстового узла)
   const clean = document.getElementById('out-text').cloneNode(true);
   clean.querySelectorAll(_OUT_UI).forEach(el => el.remove());
   clean.querySelectorAll('.cc-desc').forEach(el => el.replaceWith(...el.childNodes));
+  const tw = document.createTreeWalker(clean, NodeFilter.SHOW_TEXT), tns = [];
+  while (tw.nextNode()) if (!tw.currentNode.parentElement.closest('a') && tw.currentNode.nodeValue.search(_OUT_TYPED_LINK) >= 0) tns.push(tw.currentNode);
+  tns.forEach(n => { const t = document.createElement('template'); t.innerHTML = _outText(n.nodeValue, 'html'); n.replaceWith(t.content); });
   const html = clean.innerHTML;
   if (window.ClipboardItem) {
     const item = new ClipboardItem({
@@ -1653,14 +1684,15 @@ async function aiShrinkPost(){
     // Каждая ссылка обязана вернуться и ни одна метка не должна остаться — иначе в канал уехал бы href="@L3"
     // или пропала бы ссылка игры (а с ней 🔄). Тогда пост не трогаем.
     const got = new Set(); let unknown = 0;
-    const MANUAL_LINK = /\[([^\[\]\n<]+)\]\((https?:\/\/[^\s)]+)\)/g;
+    const MANUAL_LINK = _OUT_TYPED_LINK;
     const typed = new Set([..._escHtml(raw).matchAll(MANUAL_LINK)].map(m => m[2]));
     const html = _escHtml(text).replace(/\[([^\[\]\n]+)\]\(\s*@\s*[Ll]\s*(\d+)\s*\)/g, (m, label, n) => {
       const u = urls[n - 1];
       if (u === undefined) { unknown++; return m; }
       got.add(+n);
-      // Модели ушли круглые скобки вместо квадратных (_mdLabel) — текст не менялся, возвращаем исходный
-      const lab = label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label) : label;
+      // Квадратные скобки текста ссылки ушли модели широкими «［ ］» (_mdlLabel) — возвращаем обычные, даже если
+      // модель текст ссылки сократила; круглые вместо квадратных — только если текст не менялся
+      const lab = label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label) : label.replace(/［/g, '[').replace(/］/g, ']');
       return `<a href="${esc(u.href)}">${lab}</a>`;
     }) // набранные вручную [текст](https://…) — снова живые ссылки (только http(s) и только те, что были в посте до сжатия:
        // ссылку, придуманную моделью, оставляем текстом). «<» в тексте нет — внутрь восстановленной <a> не заворачиваем
@@ -1860,6 +1892,8 @@ function _cleanConsoleTitle(s){
     .replace(/\s+(PS4|PS5|Xbox|XBOX|PC|PlayStation\s*\d?)\b.*/i, '')
     .replace(/\s+Version\b.*/i, '')
     .replace(/\s*\+\s*/g, ' ')
+    // «Pro Skater 1 - 4» в IGDB записан «1-4»: с пробелами вокруг дефиса поиск не находил ничего
+    .replace(/(\d)\s+[-–—]\s+(\d)/g, '$1-$2')
     .replace(/[а-яёА-ЯЁ]+/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -1934,17 +1968,53 @@ function _pubTitle(g) { return _withPlat(_displayTitle(g.title), _platTag(g)); }
 // Дополнение тоже содержит все слова игры («Batman: Arkham Knight - Batman: Noel Skin») — его отсекаем
 // по словам DLC, которых нет в самом запросе (запрос «DOOM Soundtrack» саундтрек найти может).
 const _DLC_WORDS=['skin','skins','pack','costume','costumes','outfit','soundtrack','ost','dlc','expansion','season','pass','bundle','addon','upgrade','avatar','theme','episode','chapter','map','maps'];
+// NFKC: знак «Ⅵ» (SOULCALIBUR Ⅵ) становится буквами VI, а не выпадает
+// ™®© — до NFKC, иначе «Turismo™» превратился бы в одно слово «turismotm»
+const _hdNorm=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+// В найденном есть слово дополнения, которого нет в запросе
+function _hdDlcAdded(q, matched){
+  // «Add-On» после нормализации — два слова; для сверки с _DLC_WORDS склеиваем обратно
+  const dlc=s=>_hdNorm(s).replace(/\badd on\b/g,'addon').split(' ');
+  const mDlc=dlc(matched),qDlc=dlc(q);
+  return _DLC_WORDS.some(w=>mDlc.includes(w)&&!qDlc.includes(w));
+}
 function _lowMatchOk(q, matched){
   if(!matched) return false;
-  const norm=s=>String(s).toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
-  const mw=norm(matched).split(' ');
-  const qAll=norm(q).split(' ');
-  const qw=qAll.filter(w=>w.length>1||/^\d$/.test(w));
-  // «Add-On» после norm — два слова; для сверки с _DLC_WORDS склеиваем обратно
-  const dlc=s=>s.join(' ').replace(/\badd on\b/g,'addon').split(' ');
-  const mDlc=dlc(mw),qDlc=dlc(qAll);
-  if(_DLC_WORDS.some(w=>mDlc.includes(w)&&!qDlc.includes(w))) return false;
+  const mw=_hdNorm(matched).split(' ');
+  // «and» запроса в IGDB часто «&» («GTA V and Great White Shark Card» → «… & Great White Shark Card Bundle»)
+  const qw=_hdNorm(q).split(' ').filter(w=>(w.length>1||/^\d$/.test(w))&&w!=='and');
+  if(_hdDlcAdded(q,matched)) return false;
   return qw.length>0 && qw.every(w=>mw.includes(w));
+}
+// Найденное название продолжает наше без разделителя: «The Forest» → «The Forest of Doom» (medium) — это другая игра.
+// Подзаголовок через «:», «-», «(» и хвост из слов издания («… Deluxe Edition») — та же игра, не отсекаем.
+const _HD_EDITION_WORDS=['edition','deluxe','ultimate','gold','standard','digital','premium','definitive','complete','goty','remastered','remaster','bundle','collection','cross','gen','enhanced','special','anniversary','essentials','dual','pack','saga','game','of','the','year'];
+function _hdExtends(q, matched){
+  const strip=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').replace(/['’`]/g,'');
+  // В запросе есть буквы не латиницей («Δ», кириллица) — по латинским словам продолжение не определить, не отсекаем
+  if(/[^\x00-\x7f]/.test(strip(q).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[–—‘“”«»×]/g,''))) return false;
+  const toks=_hdNorm(q).split(' ').filter(Boolean);
+  if(!toks.length) return false;
+  const m=strip(matched).match(new RegExp('^[^a-z0-9]*'+toks.map(_reEsc).join('[^a-z0-9]+')+'(?![a-z0-9])','i'));
+  if(!m) return false;
+  const rest=strip(matched).slice(m[0].length);
+  if(!/[a-z0-9]/i.test(rest)||/^\s*[:\-–—(\[]/.test(rest)) return false;
+  const rw=_hdNorm(rest).split(' ');
+  // Хвост издания: все слова из списка или кончается на «Edition» («Game of the Year Edition», «Legendary Edition»)
+  return !(rw.every(w=>_HD_EDITION_WORDS.includes(w))||rw[rw.length-1]==='edition');
+}
+// Первая глава в IGDB — сама игра: «Poppy Playtime: Chapter 1» → «Poppy Playtime» (low) — это она и есть
+function _hdFirstChapter(q, matched){
+  const base=String(q).replace(/[\s:–—-]+(chapter|episode|part)\s+(1|one|i)\s*$/i,'');
+  return base!==q && _hdNorm(base)===_hdNorm(matched);
+}
+// Принимать ли ответ /igdb/cover: одно правило для сторис/коллажа (_hdCoverUrl) и аудита каталога
+function _hdAccept(q, j){
+  if(!j||!j.cover||!j.confidence) return false;
+  if(j.confidence==='high') return true;
+  if(j.confidence==='low') return _lowMatchOk(q,j.matched)||_hdFirstChapter(q,j.matched);
+  // medium: продолжение названия или дополнение/скин (как у low — по словам DLC, которых нет в запросе)
+  return !j.matched||(!_hdExtends(q,j.matched)&&!_hdDlcAdded(q,j.matched));
 }
 async function _hdCoverUrl(title){
   if(!title) return null;
@@ -1956,7 +2026,7 @@ async function _hdCoverUrl(title){
       const r=await fetch(`${API}/igdb/cover?name=${encodeURIComponent(q)}`);
       const j=await r.json();
       lastQ=q; lastConf=(j&&j.confidence)||null; lastMatched=(j&&j.matched)||null;
-      if(j&&j.cover&&j.confidence&&(j.confidence!=='low'||_lowMatchOk(q,j.matched))){
+      if(_hdAccept(q,j)){
         jEvent('hd_ok',{title,q,confidence:j.confidence,matched:j.matched||null});
         const big=j.cover.replace(/\/t_[a-z0-9_]+\//,'/t_1080p/');
         return `${API}/igdb/img?url=${encodeURIComponent(big)}`;
@@ -2606,7 +2676,7 @@ function _gameMatchKey(g){ return _gameKey(g)+'|'+(g._platform||''); }
 // пересчитываются, иначе QR и текст в открытой сторис вели бы на старый id, а новый пост — на новый.
 function _stRelinkSlots(){
   if(!_stG||!_stG.length) return;
-  const swap={}, reprice=[], dupes=[];
+  const swap={}, reprice=[], dupes=[], elChg={};
   _stG.forEach(s=>{
     if(s.id==null||!s._mk) return;
     // id новый импорт может отдать другой игре — совпадение по id засчитываем, только если это та же игра
@@ -2622,12 +2692,14 @@ function _stRelinkSlots(){
     }
     if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
     s._dupWarned=false;
-    const oldUrl=s._gameUrl, oldP=s.priceRUB;
+    const oldUrl=s._gameUrl, oldP=s.priceRUB, oldD=s.discount||0;
     if(g.priceRUB){ s.priceRUB=g.priceRUB; s.discount=g.discount||0; } // цена в кадре — из того же каталога, что и ссылка
     const u=_stGameUrl(g);
     if(u!==oldUrl){ swap[oldUrl]=u; s.id=g.id; s._gameUrl=u; }
     // одна игра в двух слотах — одна замена цены (вторая ничего бы не нашла и подняла ложный «проверь цены»)
     if(oldP&&s.priceRUB!==oldP&&u&&!reprice.some(r=>r.u===u)) reprice.push({ u, from: oldP, to: s.priceRUB });
+    // Для элементов редактора (цена, скидка с _gu этого слота): что было и что стало
+    if((u!==oldUrl||s.priceRUB!==oldP||(s.discount||0)!==oldD)&&!elChg[oldUrl]) elChg[oldUrl]={ u, fromP: oldP, toP: s.priceRUB, fromD: oldD, toD: s.discount||0 };
   });
   // Оба предупреждения — одним тостом: второй showToast затёр бы первый
   const warn=[];
@@ -2637,11 +2709,36 @@ function _stRelinkSlots(){
   }
   const open=document.getElementById('story-modal')?.classList.contains('open');
   const flush=()=>{ if(warn.length) showToast('⚠️ '+warn.join('; ')); };
-  if(!Object.keys(swap).length&&!reprice.length){ flush(); if(open) _stRedrawCurrent(); return; }
-  (_stEls||[]).forEach(el=>{
-    if(el.type!=='qr'||!swap[el.gameUrl]) return;
-    el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; _stLoadElImg(el,el.logoUrl);
+  if(!Object.keys(swap).length&&!reprice.length&&!Object.keys(elChg).length){ flush(); if(open) _stRedrawCurrent(); return; }
+  // Элементы редактора: QR, цена и скидка своего слота. Те же правки — в снимках Ctrl+Z / Ctrl+Y:
+  // иначе откат возвращал бы старый QR и старую цену. Цену и скидку, которые человек переписал сам, не трогаем.
+  let elMissed=0, elNewDisc=0;
+  const fixEls=(els,live)=>els.filter(el=>{
+    if(el.type==='qr'&&swap[el.gameUrl]){
+      el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; // снимкам картинку грузит stUndo/stRedo
+      if(live) _stLoadElImg(el,el.logoUrl);
+      return true;
+    }
+    const c=el._gu&&elChg[el._gu]; if(!c) return true;
+    el._gu=c.u;
+    if(el.type==='price'&&c.toP!==c.fromP){
+      if(el.text===_stPriceTxt(c.fromP)) el.text=_stPriceTxt(c.toP); else if(live) elMissed++;
+    }
+    // Скидка появилась, а плашки у слота не было — сами не рисуем (место выбирал человек), но говорим
+    if(el.type==='price'&&live&&!c.fromD&&c.toD) elNewDisc++;
+    if(el.type==='sticker'&&c.toD!==c.fromD){
+      if(el.text!==_stDiscTxt(c.fromD)){ if(live) elMissed++; return true; }
+      if(!c.toD) return false; // скидки больше нет — плашка «-N%» соврала бы
+      el.text=_stDiscTxt(c.toD);
+    }
+    return true;
   });
+  if(_stEls&&_stEls.length){
+    const sel=_stEls[_stSel]; _stEls=fixEls(_stEls,true); _stSel=sel?_stEls.indexOf(sel):-1;
+  }
+  [..._stUndoStack,..._stRedoStack].forEach(sn=>{ const sel=sn.els[sn.sel]; sn.els=fixEls(sn.els,false); sn.sel=sel?sn.els.indexOf(sel):-1; });
+  if(elMissed) warn.push('проверь цену и скидку на картинке — их правили вручную');
+  if(elNewDisc) warn.push('у игры появилась скидка — добавь плашку «Скидка», если нужна');
   // Одним проходом: при последовательной замене новый адрес одного слота мог совпасть со старым другого и заменился бы дважды
   const keys=Object.keys(swap);
   const rx=keys.length?new RegExp(keys.sort((a,b)=>b.length-a.length).map(_reEsc).join('|'),'g'):null;
@@ -2663,6 +2760,9 @@ function _stRelinkSlots(){
   if(open) _stRedrawCurrent(); // кадр с новыми ценами и QR
 }
 function _reEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+// Текст элементов цены и скидки — один формат при создании и при пересчёте (_stRelinkSlots сверяет по нему)
+function _stPriceTxt(p){ return p?p.toLocaleString('ru')+' ₽':''; }
+function _stDiscTxt(d){ return '-'+d+'%'; }
 function _stQrSrc(url){ return _safeImgUrl(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&margin=6&data=${encodeURIComponent(url)}`); }
 function _stSetQrOn(v){ _stQrOn=v; localStorage.setItem('cc_qr_on',v?'1':'0'); jEvent('used',{feature:'qrOn',to:v}); _stRenderTemplate(); }
 function _stQrFits(size,sx){ return size>=ST_QR_MIN*sx; }
@@ -3228,14 +3328,19 @@ function _stDrawCoverCard(ctx,x,y,w,h,g,showDesc,inset){
   ctx.save();_stTextShadow(ctx,sx);ctx.font=`600 ${tfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(255,255,255,0.9)';ctx.textAlign='left';ctx.textBaseline='top';
   tlines.forEach((l,li)=>ctx.fillText(l,x+pad,cardY+vpad+li*tlh));ctx.restore();
   const priceY=y+h-vpad-pfs;
-  if(g.priceRUB){ctx.save();_stTextShadow(ctx,sx);ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(g.priceRUB.toLocaleString('ru')+' ₽',x+pad,priceY);ctx.restore();}
+  if(g.priceRUB){ctx.save();_stTextShadow(ctx,sx);ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;ctx.fillStyle='#f0c040';ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText(_stPriceTxt(g.priceRUB),x+pad,priceY);ctx.restore();}
   if(dlines.length){
     const top=cardY+vpad+titleH+Math.round(6*sx),bot=priceY-Math.round(6*sx);
     const dy=top+Math.max(0,(bot-top-descH)/2);
     ctx.save();_stTextShadow(ctx,sx);ctx.font=`${dfs}px 'Noto Sans',sans-serif`;ctx.fillStyle='rgba(210,210,228,0.92)';ctx.textAlign='left';ctx.textBaseline='top';
     dlines.forEach((l,li)=>ctx.fillText(l,x+pad,dy+li*dlh));ctx.restore();
   }
-  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6),bx=x+w-bw-pad-qrRes,by=Math.round(priceY+(pfs-bh)/2);ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
+  if(g.discount){const bfs=Math.max(Math.round(24*sx),10),bw=Math.round(80*sx),bh=Math.round(bfs*1.6);let bx=x+w-bw-pad-qrRes,by=Math.round(priceY+(pfs-bh)/2);
+    // В узкой карточке (мини-обложки «Диагонали» и «Героя») бейдж рядом с ценой ложился на неё — тогда он уходит
+    // в правый верхний угол обложки
+    if(g.priceRUB){ctx.save();ctx.font=`700 ${pfs}px 'Oswald',sans-serif`;const pr=x+pad+ctx.measureText(_stPriceTxt(g.priceRUB)).width;ctx.restore();
+      if(pr+Math.round(8*sx)>bx){const m=Math.round(10*sx);bx=x+w-bw-m;by=y+m;}}
+    ctx.save();_stTextShadow(ctx,sx);ctx.fillStyle='#e04020';ctx.beginPath();ctx.roundRect(bx,by,bw,bh,Math.round(4*sx));ctx.fill();ctx.fillStyle='#fff';ctx.font=`700 ${bfs}px 'Oswald',sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('-'+g.discount+'%',bx+bw/2,by+bh/2);ctx.restore();}
   if(qrS)_stDrawQr(ctx,qrImg,x+w-pad-qrPadW-qrS,cardY+Math.round((cardH-qrS)/2),qrS);
 }
 // Сколько строк максимум отдаём описанию. Четыре, а не «сколько угодно»: высота блока НЕ должна
@@ -3626,9 +3731,10 @@ function _stTemplateToEditor(){
       _stEls.push({type:'overlay',x:pad,y:cardY+14+titleH,w:textW,h:dH,text:dtxt,fontSize:30,fontFamily:'Noto Sans',color:'rgba(210,210,228,0.92)',bgColor:'transparent',opacity:1});
     }
     // price overlay
-    _stEls.push({type:'price',x:pad,y:cardY+cardH-110,w:400,h:100,text:g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'',fontSize:68,color:'#f0c040',bgColor:'transparent',opacity:1});
+    // _gu — адрес игры слота: по нему _stRelinkSlots находит цену и скидку этой игры при замене каталога
+    _stEls.push({type:'price',x:pad,y:cardY+cardH-110,w:400,h:100,text:_stPriceTxt(g.priceRUB),fontSize:68,color:'#f0c040',bgColor:'transparent',opacity:1,_gu:_stGameUrl(g)});
     // sticker for discount
-    if(g.discount)_stEls.push({type:'sticker',x:STORY_W-260,y:i*slotH+20,w:220,h:80,text:'-'+g.discount+'%',fontSize:52,shape:'pill',color:'#fff',bgColor:'#e04020',opacity:1});
+    if(g.discount)_stEls.push({type:'sticker',x:STORY_W-260,y:i*slotH+20,w:220,h:80,text:_stDiscTxt(g.discount),fontSize:52,shape:'pill',color:'#fff',bgColor:'#e04020',opacity:1,_gu:_stGameUrl(g)});
     if(qrOn){
       const qEl={type:'qr',x:STORY_W-qs-pad-6,y:cardY+cardH-qs-16,w:qs,h:qs,logoUrl:_stQrSrc(qUrl),imgEl:null,opacity:1,gameUrl:qUrl};
       _stEls.push(qEl);_stLoadElImg(qEl,qEl.logoUrl);
@@ -3984,8 +4090,10 @@ function stUndo(){
   const snap=_stUndoStack.pop();
   jEvent('undo',{els:_stEls.length,selType:_stSel>=0&&_stEls[_stSel]?_stEls[_stSel].type:null,depth:_stUndoStack.length});
   _stRedoStack.push(_stSnapState());if(_stRedoStack.length>30)_stRedoStack.shift();
-  _stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();
+  _stEls=snap.els;_stSel=snap.sel;_stReloadElImgs();_stRender();_stRenderSidebar();
 }
+// QR в снимке, перецепленный _stRelinkSlots после замены каталога, приходит без картинки — догружаем
+function _stReloadElImgs(){_stEls.forEach(el=>{if(el.type==='qr'&&!el.imgEl&&el.logoUrl)_stLoadElImg(el,el.logoUrl);});}
 // Откатить откат раньше было нечем: стек был односторонний, и промах по Ctrl+Z стоил работы.
 // Своё имя события не заводим (таксономия журнала закрытая) — идёт как used{feature:'redo'}.
 function stRedo(){
@@ -3993,7 +4101,7 @@ function stRedo(){
   const snap=_stRedoStack.pop();
   jEvent('used',{feature:'redo',els:_stEls.length,depth:_stRedoStack.length});
   _stUndoStack.push(_stSnapState());if(_stUndoStack.length>30)_stUndoStack.shift();
-  _stEls=snap.els;_stSel=snap.sel;_stRender();_stRenderSidebar();
+  _stEls=snap.els;_stSel=snap.sel;_stReloadElImgs();_stRender();_stRenderSidebar();
 }
 function _stSyncHistBtns(){
   [['st-undo-btn',_stUndoStack.length,'↶ Отменить'],['st-redo-btn',_stRedoStack.length,'↷ Вернуть']].forEach(([id,n,lbl])=>{
@@ -4041,7 +4149,7 @@ function _stLoadElImg(el,url){
   img.src=url;
 }
 function stAddOverlay(){jEvent('el_add',{type:'overlay',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stPushEl(_stElSpawn({type:'overlay',w:920,h:260,text:'Короткое описание игры',fontSize:52,fontFamily:'Noto Sans',color:'#ffffff',bgColor:'rgba(0,0,0,0.65)',opacity:1},80,1400));}
-function stAddPrice(){jEvent('el_add',{type:'price',tpl:_stTplId,els:_stEls.length});_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stPushEl(_stElSpawn({type:'price',w:400,h:110,text:g&&g.priceRUB?g.priceRUB.toLocaleString('ru')+' ₽':'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1},340,Math.round(si*slotH+slotH*0.7)));}
+function stAddPrice(){jEvent('el_add',{type:'price',tpl:_stTplId,els:_stEls.length});_stSnapshot();const si=Math.max(0,Math.min(_stActiveSlot,_stGameCount-1));const g=_stG[si];const slotH=STORY_H/_stGameCount;_stPushEl(_stElSpawn(Object.assign({type:'price',w:400,h:110,text:g&&g.priceRUB?_stPriceTxt(g.priceRUB):'990 ₽',fontSize:68,color:'#ffffff',bgColor:'rgba(0,112,209,0.92)',opacity:1},g&&g.priceRUB?{_gu:_stGameUrl(g)}:{}),340,Math.round(si*slotH+slotH*0.7)));}
 function stAddSticker(){jEvent('el_add',{type:'sticker',tpl:_stTplId,els:_stEls.length});_stSnapshot();_stPushEl(_stElSpawn({type:'sticker',w:360,h:100,text:'СКИДКА',fontSize:58,shape:'pill',color:'#ffffff',bgColor:'#e63946',opacity:1},60,60));}
 // Логотип рождался пустым (logoUrl:'') — пунктирная рамка с надписью LOGO, и без ручного URL от
 // элемента не было никакого толку: «ну добавляю я логотип, и что?». Кладём логотип магазина,
