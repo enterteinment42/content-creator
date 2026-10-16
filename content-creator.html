@@ -1972,7 +1972,9 @@ function _pubTitle(g) { return _withPlat(_displayTitle(g.title), _platTag(g)); }
 const _DLC_WORDS=['skin','skins','pack','costume','costumes','outfit','soundtrack','ost','dlc','expansion','season','pass','bundle','addon','upgrade','avatar','theme','episode','chapter','map','maps'];
 // NFKC: знак «Ⅵ» (SOULCALIBUR Ⅵ) становится буквами VI, а не выпадает
 // ™®© — до NFKC, иначе «Turismo™» превратился бы в одно слово «turismotm»
-const _hdNorm=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+// ™®© — до нормализации (иначе «Turismo™» стал бы словом «turismotm»); NFKD: «Ⅵ» → VI, «é» → e
+const _hdPlain=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKD').replace(/[̀-ͯ]/g,'');
+const _hdNorm=s=>_hdPlain(s).toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 // В найденном есть слово дополнения, которого нет в запросе
 function _hdDlcAdded(q, matched){
   // «Add-On» после нормализации — два слова; для сверки с _DLC_WORDS склеиваем обратно
@@ -1990,12 +1992,13 @@ function _lowMatchOk(q, matched){
 }
 // Найденное название продолжает наше без разделителя: «The Forest» → «The Forest of Doom» (medium) — это другая игра.
 // Подзаголовок через «:», «-», «(» и хвост из слов издания («… Deluxe Edition») — та же игра, не отсекаем.
-const _HD_EDITION_WORDS=['edition','deluxe','ultimate','gold','standard','digital','premium','definitive','complete','goty','remastered','remaster','collection','cross','gen','enhanced','special','anniversary','essentials','dual','saga','game','of','the','year','directors','cut','hd','remake','trilogy','redux'];
-// bundle и pack сюда не входят: их отсекает _hdDlcAdded, если их нет в самом запросе
+const _HD_EDITION_WORDS=['edition','deluxe','ultimate','gold','standard','digital','premium','definitive','complete','goty','remastered','remaster','collection','cross','gen','enhanced','special','anniversary','essentials','dual','saga','game','of','the','year','directors','cut','hd','redux'];
+// Remake и Trilogy — не издание: «Final Fantasy VII» → «… Remake» другая игра, «Mass Effect» → «… Trilogy» сборник.
+// bundle и pack — издание, только если они есть в самом запросе (иначе их отсекает _hdDlcAdded)
 function _hdExtends(q, matched){
-  const strip=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/['’`]/g,'');
+  const strip=s=>_hdPlain(s).replace(/['’`]/g,'');
   // В запросе есть буквы не латиницей («Δ», кириллица) — по латинским словам продолжение не определить, не отсекаем
-  if(/[^\x00-\x7f]/.test(strip(q).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[–—‘“”«»×]/g,''))) return false;
+  if(/[^\x00-\x7f]/.test(strip(q).replace(/[–—‘“”«»×]/g,''))) return false;
   const toks=_hdNorm(q).split(' ').filter(Boolean);
   if(!toks.length) return false;
   const m=strip(matched).match(new RegExp('^[^a-z0-9]*'+toks.map(_reEsc).join('[^a-z0-9]+')+'(?![a-z0-9])','i'));
@@ -2004,7 +2007,7 @@ function _hdExtends(q, matched){
   if(!/[a-z0-9]/i.test(rest)||/^\s*[:\-–—(\[]/.test(rest)) return false;
   const rw=_hdNorm(rest).split(' ');
   // Хвост издания: все слова из списка или кончается на «Edition» («Game of the Year Edition», «Legendary Edition»)
-  return !(rw.every(w=>_HD_EDITION_WORDS.includes(w))||rw[rw.length-1]==='edition');
+  return !(rw.every(w=>_HD_EDITION_WORDS.includes(w)||((w==='bundle'||w==='pack')&&toks.includes(w)))||rw[rw.length-1]==='edition');
 }
 // Первая глава в IGDB — сама игра: «Poppy Playtime: Chapter 1» → «Poppy Playtime» (low) — это она и есть
 function _hdFirstChapter(q, matched){
@@ -2717,22 +2720,25 @@ function _stRelinkSlots(){
   // иначе откат возвращал бы старый QR и старую цену. Цену и скидку, которые человек переписал сам, не трогаем.
   let elMissed=0, elNewDisc=0, elGoneDisc=0;
   const fixEls=(els,live)=>{
-    const hasSticker=els.some(el=>el.type==='sticker'); // плашку скидки человек мог поставить и сам (без _gu)
+    // Плашка скидки у слота уже есть: своя из шаблона (по _gu) или, при одной игре, поставленная руками (без _gu)
+    const stGu=new Set(els.filter(el=>el.type==='sticker'&&el._gu).map(el=>el._gu));
+    const anyHand=_stGameCount===1&&els.some(el=>el.type==='sticker'&&!el._gu);
     els.forEach(el=>{
       if(el.type==='qr'&&swap[el.gameUrl]){
         el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; // снимкам картинку грузит stUndo/stRedo
         if(live) _stLoadElImg(el,el.logoUrl);
         return;
       }
-      const c=el._gu&&elChg[el._gu]; if(!c) return;
+      const key=el._gu, c=key&&elChg[key]; if(!c) return;
       el._gu=c.u;
       if(el.type==='price'&&c.toP!==c.fromP){
         if(el.text===_stPriceTxt(c.fromP)) el.text=_stPriceTxt(c.toP); else if(live) elMissed++;
       }
       // Скидка появилась, а плашки нет — сами не рисуем (место выбирал человек), но говорим
-      if(el.type==='price'&&live&&!c.fromD&&c.toD&&!hasSticker) elNewDisc++;
+      if(el.type==='price'&&live&&!c.fromD&&c.toD&&!stGu.has(key)&&!anyHand) elNewDisc++;
       if(el.type==='sticker'&&c.toD!==c.fromD){
-        if(el.text!==_stDiscTxt(c.fromD)){ if(live) elMissed++; return; }
+        // «-N%» с любым N — наша: оставленная после пропажи скидки плашка при её возврате тоже обновляется
+        if(!/^-\d+%$/.test(el.text)){ if(live) elMissed++; return; }
         // Скидки больше нет — плашку не удаляем (её могли двигать и красить), просим убрать
         if(!c.toD){ if(live) elGoneDisc++; return; }
         el.text=_stDiscTxt(c.toD);

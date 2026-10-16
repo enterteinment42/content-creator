@@ -126,7 +126,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     ['Grand Theft Auto V and Great White Shark Card Bundle', 'low', 'Grand Theft Auto V: Premium Edition & Great White Shark Card Bundle', true],
     ['Gran Turismo 7', 'low', 'Gran Turismo™ 7', true], ['Minecraft', 'medium', 'Minecraft™ Dungeons', false],
     ['The Witcher 3 Wild Hunt', 'medium', 'The Witcher 3 Wild Hunt Game of the Year Edition', true], ['Death Stranding', 'medium', "Death Stranding Director's Cut", true],
-    ['Pokémon Legends', 'low', 'Pokemon Legends: Arceus', true], ['Mass Effect', 'medium', 'Mass Effect Legendary Edition', true],
+    ['Pokémon Legends: Arceus', 'low', 'Pokemon Legends: Arceus', true], ['Final Fantasy VII', 'medium', 'Final Fantasy VII Remake', false],
+    ['Call of Duty Vanguard Cross-Gen Bundle', 'medium', 'Call of Duty Vanguard Cross-Gen Bundle Pack', false], ['Starter Pack', 'medium', 'Starter Pack Bundle', false], ['Mass Effect', 'medium', 'Mass Effect Legendary Edition', true],
   ].map(([q, c, m, want]) => ({ q, got: _hdAccept(q, { cover: 'x', confidence: c, matched: m }), want })));
   ok('_hdAccept: продолжение названия и скин отсекаются, первая глава и «1 - 4» находятся', ha.every(x => x.got === x.want), JSON.stringify(ha.filter(x => x.got !== x.want)));
   // ответ модели строкой — не описания по буквам
@@ -921,12 +922,17 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     // скидка пропала — плашку не удаляем (и в снимках), просим убрать
     games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 5, discount: _gameMatchKey(g) === s._mk ? 0 : g.discount } : g);
     _stRelinkSlots(); const gone = { st: pick('sticker')?.text, toast: __toast() };
+    // скидка вернулась — оставленная плашка обновляется, без ложного «правили вручную»
+    document.getElementById('toast').textContent = '';
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 5, discount: _gameMatchKey(g) === s._mk ? 30 : g.discount } : g);
+    _stRelinkSlots(); const back = { st: pick('sticker')?.text, toast: __toast() };
     games = bak; s.discount = d0; _stRelinkSlots(); _stSetMode('templates'); _stEls = []; _stUndoStack = []; _stRedoStack = []; _stRenderTemplate();
-    return { want: _stPriceTxt(p0 + 100), live, undo, hand, gone };
+    return { want: _stPriceTxt(p0 + 100), live, undo, hand, gone, back };
   });
   ok('режим элементов: замена каталога меняет цену, скидку и QR элементов, в том числе в снимках Ctrl+Z; правленую цену не трогает',
     re.live.price === re.want && re.live.st === '-25%' && re.live.qr && re.live.gu && re.undo.price === re.want && re.undo.st === '-25%' && re.undo.qr && re.undo.img
-    && re.hand.price === 'ХИТ' && /правили вручную/.test(re.hand.toast) && re.gone.st === '-25%' && /скидки у игры больше нет/.test(re.gone.toast), JSON.stringify(re));
+    && re.hand.price === 'ХИТ' && /правили вручную/.test(re.hand.toast) && re.gone.st === '-25%' && /скидки у игры больше нет/.test(re.gone.toast)
+    && re.back.st === '-30%' && !/правили вручную|появилась скидка/.test(re.back.toast), JSON.stringify(re));
   // Бейдж скидки в узкой мини-карточке («Диагональ», «Герой») не налезает на цену
   const bdg = await p.evaluate(() => {
     const c = document.createElement('canvas'); c.width = STORY_W; c.height = STORY_H; const ctx = c.getContext('2d'), rr = [], ft = [];
