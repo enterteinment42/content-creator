@@ -1596,6 +1596,7 @@ function copyOut() {
   const clean = document.getElementById('out-text').cloneNode(true);
   clean.querySelectorAll(_OUT_UI).forEach(el => el.remove());
   clean.querySelectorAll('.cc-desc').forEach(el => el.replaceWith(...el.childNodes));
+  clean.normalize(); // соседние текстовые узлы (после вставки, правки) — в один, чтобы ссылка не распалась
   const tw = document.createTreeWalker(clean, NodeFilter.SHOW_TEXT), tns = [];
   while (tw.nextNode()) if (!tw.currentNode.parentElement.closest('a') && tw.currentNode.nodeValue.search(_OUT_TYPED_LINK) >= 0) tns.push(tw.currentNode);
   tns.forEach(n => { const t = document.createElement('template'); t.innerHTML = _outText(n.nodeValue, 'html'); n.replaceWith(t.content); });
@@ -1692,7 +1693,8 @@ async function aiShrinkPost(){
       got.add(+n);
       // Квадратные скобки текста ссылки ушли модели широкими «［ ］» (_mdlLabel) — возвращаем обычные, даже если
       // модель текст ссылки сократила; круглые вместо квадратных — только если текст не менялся
-      const lab = label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label) : label.replace(/［/g, '[').replace(/］/g, ']');
+      const lab = label === _escHtml(_mdlLabel(u.label)) || label === _escHtml(_mdLabel(u.label)) ? _escHtml(u.label)
+        : label.replace(/［/g, '[').replace(/］/g, ']');
       return `<a href="${esc(u.href)}">${lab}</a>`;
     }) // набранные вручную [текст](https://…) — снова живые ссылки (только http(s) и только те, что были в посте до сжатия:
        // ссылку, придуманную моделью, оставляем текстом). «<» в тексте нет — внутрь восстановленной <a> не заворачиваем
@@ -1970,7 +1972,7 @@ function _pubTitle(g) { return _withPlat(_displayTitle(g.title), _platTag(g)); }
 const _DLC_WORDS=['skin','skins','pack','costume','costumes','outfit','soundtrack','ost','dlc','expansion','season','pass','bundle','addon','upgrade','avatar','theme','episode','chapter','map','maps'];
 // NFKC: знак «Ⅵ» (SOULCALIBUR Ⅵ) становится буквами VI, а не выпадает
 // ™®© — до NFKC, иначе «Turismo™» превратился бы в одно слово «turismotm»
-const _hdNorm=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+const _hdNorm=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/['’`]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 // В найденном есть слово дополнения, которого нет в запросе
 function _hdDlcAdded(q, matched){
   // «Add-On» после нормализации — два слова; для сверки с _DLC_WORDS склеиваем обратно
@@ -1988,9 +1990,10 @@ function _lowMatchOk(q, matched){
 }
 // Найденное название продолжает наше без разделителя: «The Forest» → «The Forest of Doom» (medium) — это другая игра.
 // Подзаголовок через «:», «-», «(» и хвост из слов издания («… Deluxe Edition») — та же игра, не отсекаем.
-const _HD_EDITION_WORDS=['edition','deluxe','ultimate','gold','standard','digital','premium','definitive','complete','goty','remastered','remaster','bundle','collection','cross','gen','enhanced','special','anniversary','essentials','dual','pack','saga','game','of','the','year'];
+const _HD_EDITION_WORDS=['edition','deluxe','ultimate','gold','standard','digital','premium','definitive','complete','goty','remastered','remaster','collection','cross','gen','enhanced','special','anniversary','essentials','dual','saga','game','of','the','year','directors','cut','hd','remake','trilogy','redux'];
+// bundle и pack сюда не входят: их отсекает _hdDlcAdded, если их нет в самом запросе
 function _hdExtends(q, matched){
-  const strip=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').replace(/['’`]/g,'');
+  const strip=s=>String(s).replace(/[™®©]/g,' ').normalize('NFKC').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/['’`]/g,'');
   // В запросе есть буквы не латиницей («Δ», кириллица) — по латинским словам продолжение не определить, не отсекаем
   if(/[^\x00-\x7f]/.test(strip(q).normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[–—‘“”«»×]/g,''))) return false;
   const toks=_hdNorm(q).split(' ').filter(Boolean);
@@ -2712,33 +2715,35 @@ function _stRelinkSlots(){
   if(!Object.keys(swap).length&&!reprice.length&&!Object.keys(elChg).length){ flush(); if(open) _stRedrawCurrent(); return; }
   // Элементы редактора: QR, цена и скидка своего слота. Те же правки — в снимках Ctrl+Z / Ctrl+Y:
   // иначе откат возвращал бы старый QR и старую цену. Цену и скидку, которые человек переписал сам, не трогаем.
-  let elMissed=0, elNewDisc=0;
-  const fixEls=(els,live)=>els.filter(el=>{
-    if(el.type==='qr'&&swap[el.gameUrl]){
-      el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; // снимкам картинку грузит stUndo/stRedo
-      if(live) _stLoadElImg(el,el.logoUrl);
-      return true;
-    }
-    const c=el._gu&&elChg[el._gu]; if(!c) return true;
-    el._gu=c.u;
-    if(el.type==='price'&&c.toP!==c.fromP){
-      if(el.text===_stPriceTxt(c.fromP)) el.text=_stPriceTxt(c.toP); else if(live) elMissed++;
-    }
-    // Скидка появилась, а плашки у слота не было — сами не рисуем (место выбирал человек), но говорим
-    if(el.type==='price'&&live&&!c.fromD&&c.toD) elNewDisc++;
-    if(el.type==='sticker'&&c.toD!==c.fromD){
-      if(el.text!==_stDiscTxt(c.fromD)){ if(live) elMissed++; return true; }
-      if(!c.toD) return false; // скидки больше нет — плашка «-N%» соврала бы
-      el.text=_stDiscTxt(c.toD);
-    }
-    return true;
-  });
-  if(_stEls&&_stEls.length){
-    const sel=_stEls[_stSel]; _stEls=fixEls(_stEls,true); _stSel=sel?_stEls.indexOf(sel):-1;
-  }
-  [..._stUndoStack,..._stRedoStack].forEach(sn=>{ const sel=sn.els[sn.sel]; sn.els=fixEls(sn.els,false); sn.sel=sel?sn.els.indexOf(sel):-1; });
+  let elMissed=0, elNewDisc=0, elGoneDisc=0;
+  const fixEls=(els,live)=>{
+    const hasSticker=els.some(el=>el.type==='sticker'); // плашку скидки человек мог поставить и сам (без _gu)
+    els.forEach(el=>{
+      if(el.type==='qr'&&swap[el.gameUrl]){
+        el.gameUrl=swap[el.gameUrl]; el.logoUrl=_stQrSrc(el.gameUrl); el.imgEl=null; // снимкам картинку грузит stUndo/stRedo
+        if(live) _stLoadElImg(el,el.logoUrl);
+        return;
+      }
+      const c=el._gu&&elChg[el._gu]; if(!c) return;
+      el._gu=c.u;
+      if(el.type==='price'&&c.toP!==c.fromP){
+        if(el.text===_stPriceTxt(c.fromP)) el.text=_stPriceTxt(c.toP); else if(live) elMissed++;
+      }
+      // Скидка появилась, а плашки нет — сами не рисуем (место выбирал человек), но говорим
+      if(el.type==='price'&&live&&!c.fromD&&c.toD&&!hasSticker) elNewDisc++;
+      if(el.type==='sticker'&&c.toD!==c.fromD){
+        if(el.text!==_stDiscTxt(c.fromD)){ if(live) elMissed++; return; }
+        // Скидки больше нет — плашку не удаляем (её могли двигать и красить), просим убрать
+        if(!c.toD){ if(live) elGoneDisc++; return; }
+        el.text=_stDiscTxt(c.toD);
+      }
+    });
+  };
+  if(_stEls&&_stEls.length) fixEls(_stEls,true);
+  [..._stUndoStack,..._stRedoStack].forEach(sn=>fixEls(sn.els,false));
   if(elMissed) warn.push('проверь цену и скидку на картинке — их правили вручную');
   if(elNewDisc) warn.push('у игры появилась скидка — добавь плашку «Скидка», если нужна');
+  if(elGoneDisc) warn.push('скидки у игры больше нет — убери плашку «-N%» с картинки');
   // Одним проходом: при последовательной замене новый адрес одного слота мог совпасть со старым другого и заменился бы дважды
   const keys=Object.keys(swap);
   const rx=keys.length?new RegExp(keys.sort((a,b)=>b.length-a.length).map(_reEsc).join('|'),'g'):null;
