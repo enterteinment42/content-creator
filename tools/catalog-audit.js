@@ -37,7 +37,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     // Сверка «наша игра ↔ что нашёл IGDB» без ложных тревог: римские цифры = арабские, слова издания с нашей стороны
     // не в счёт, сокращения и слитное написание сворачиваются («gta» = grand theft auto, «farcry» = far cry)
     const ROM = { i: '1', ii: '2', iii: '3', iv: '4', v: '5', vi: '6', vii: '7', viii: '8', ix: '9', x: '10' };
-    const wn = s => words(s).map(w => ROM[w] || w);
+    // ударения снимаем тем же _hdPlain, что и приложение: «Ragnarök» = ragnarok, а не «ragnar k»
+    const wn = s => words(_hdPlain(s)).map(w => ROM[w] || w);
     const EDW = new Set(['edition', 'deluxe', 'ultimate', 'gold', 'standard', 'digital', 'premium', 'bundle', 'cross', 'gen', 'definitive', 'goty', 'complete', 'collection', 'the', 'of', 'a', 'and', 'game', 'year', 'remastered']);
     const fold = (miss, extra) => {
       for (const m of miss) for (let i = 0; i < extra.length; i++) for (let k = i + 2; k <= extra.length; k++) {
@@ -98,7 +99,8 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
       const w = await imgW(_safeImgUrl(_igdbOriginal(src)));
       // Чужая: HD принят, но найденная игра по словам не совпадает с нашей (лишние слова — другая игра/DLC/сборник)
       let alien = null;
-      if (hd && hd.matched) {
+      // «Poppy Playtime: Chapter 1» → «Poppy Playtime» — первая глава и есть игра (_hdFirstChapter), не чужая
+      if (hd && hd.matched && !_hdFirstChapter(hd.q, hd.matched)) {
         const our = wn(hd.q), their = wn(hd.matched);
         const extra = their.filter(x => !our.includes(x)), miss = our.filter(x => !their.includes(x) && !EDW.has(x));
         fold(miss, extra);

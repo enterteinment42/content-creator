@@ -1364,9 +1364,11 @@ function _ccRegenHtml(i) {
   return `<span class="cc-regen" contenteditable="false" data-gi="${i}" title="Переписать описание этой игры" onclick="regenGameDesc(this)">🔄</span>`;
 }
 // opts.rewrite — «🔄 Заново»: ИИ переписывает описания ВСЕХ игр, а не только пустых; описание из базы
-// уходит подсказкой по фактам, текущий текст поста (opts.avoid: Map игра → текст) — как «не повторяй».
+// уходит подсказкой по фактам, текущий текст поста (opts.avoid: Map _ccGameKey → текст) — как «не повторяй».
+// Игры поста: выбранные и с ценой — одно правило для «Собрать» и «Заново»
+function _postSel() { return games.filter(g => g._sel && g.priceRUB); }
 async function generateAIPost(opts = {}) {
-  const sel = games.filter(g => g._sel && g.priceRUB);
+  const sel = _postSel();
   if (!sel.length) { showToast('Выбери хотя бы одну игру!'); return; }
   const rewrite = !!opts.rewrite, avoid = opts.avoid || new Map();
   const btn = document.getElementById('gen-btn');
@@ -1403,7 +1405,7 @@ async function generateAIPost(opts = {}) {
         const chunk = chunks[ci];
         status.textContent = `Генерирую описания: пакет ${ci + 1}/${chunks.length} (${chunk.length} игр)...`;
         const prompt = _descPrompt(chunk.map(g => ({ title: _pubTitle(g),
-          facts: rewrite ? g.description || '' : '', avoid: rewrite ? avoid.get(g) || '' : '' })));
+          facts: rewrite ? g.description || '' : '', avoid: rewrite ? avoid.get(_ccGameKey(g)) || '' : '' })));
         const resp = await fetch(API + '/api/claude', {
           method: 'POST', headers: _claudeHeaders(),
           body: JSON.stringify({ model: descModel, max_tokens: 6000, messages: [{ role: 'user', content: prompt }] })
@@ -1433,7 +1435,7 @@ async function generateAIPost(opts = {}) {
 
     const lines = [];
     // Не переписанная при «Заново» игра сохраняет то, что стояло в посте (у игры без описания в базе — прежний текст ИИ)
-    const descs = sel.map(g => genDescs.get(g) || (rewrite && avoid.get(g)) || g.description || '');
+    const descs = sel.map(g => genDescs.get(g) || (rewrite && avoid.get(_ccGameKey(g))) || g.description || '');
     sel.forEach((g, i) => {
       const desc = descs[i];
       const dt = _pubTitle(g); // у двойника PS4/PS5 — с платформой: «Gran Turismo 7 (PS4)»
@@ -1486,12 +1488,13 @@ async function generateAIPost(opts = {}) {
   }
 }
 function regenPost() {
+  if (!_postSel().length) { showToast('Выбери хотя бы одну игру!'); return; }
   // Пересборка без правки = версия модели отвергнута целиком (aiPasses в скилле).
   _jPostEdited();
   if (_ccPostBot) jEvent('rejected', { mode: 'post', reason: 'regen', botBefore: _ccPostBot, aiPasses: _jAiPasses });
   // Раньше «Заново» молча собирал тот же пост из базы: ИИ звался только для игр без описания
   const avoid = new Map();
-  _ccPostGames.forEach((g, i) => { const t = _ccDescText(document.getElementById('out-text'), i); if (t) avoid.set(g, t); });
+  _ccPostGames.forEach((g, i) => { const t = _ccDescText(document.getElementById('out-text'), i); if (t) avoid.set(_ccGameKey(g), t); });
   document.getElementById('out-panel').style.display = 'none';
   return generateAIPost({ rewrite: true, avoid });
 }
@@ -1520,6 +1523,7 @@ async function regenGameDesc(btn) {
     // Пока шёл запрос, пост пересобрали («Заново», «Собрать», «Сжать») — ответ уже не к этому тексту
     if (gen !== _ccPostGen) { showToast('Пост пересобран, пока шла генерация — описание не вставлено'); return; }
     const after = d.trim();
+    _jPostEdited(); // правку человека (в том числе этого абзаца) фиксируем до того, как её заменит ответ модели
     if (!_ccSetDesc(box, i, after)) throw new Error('абзац игры стёрт, пока шла генерация');
     // Версия ИИ меняется только в этом абзаце — правки человека в остальном тексте журнал по-прежнему видит
     let botOld = '';
@@ -1528,7 +1532,6 @@ async function regenGameDesc(btn) {
       botOld = _ccDescText(bot, i);
       if (_ccSetDesc(bot, i, after)) { _ccPostBotHtml = bot.innerHTML; _ccPostBot = _outSerialize('plain', bot); }
     }
-    _jPostEdited();
     _jAiPasses++;
     jEvent('rejected', { mode: 'post_game', reason: 'regen', title, botBefore: botOld, shown: before, aiPasses: _jAiPasses - 1 });
     jEvent('generated', { mode: 'post_game', model: descModel, title, before, after, aiPasses: _jAiPasses });
@@ -1547,9 +1550,16 @@ function _outAttachRegen() {
   const box = document.getElementById('out-text');
   if (!box) return;
   _ccPostGames.forEach((g, i) => {
-    if (g.id == null || box.querySelector(`.cc-regen[data-gi="${i}"]`)) return;
-    const href = _stGameUrl(g);
-    const a = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === href);
+    if (box.querySelector(`.cc-regen[data-gi="${i}"]`)) return;
+    // Свой товар (id:null) идёт без ссылки — его строку находим по названию в тексте, вне абзацев описаний
+    let a;
+    if (g.id != null) { const href = _stGameUrl(g); a = [...box.querySelectorAll('a')].find(x => x.getAttribute('href') === href); }
+    else {
+      // Только строка товара: до названия — лишь эмодзи и пробелы, после — « — цена». Иначе «PS5 Slim» нашёлся бы
+      // в шапке «Новинка PS5 Slim и игры», а «Консоль» — в строке «Консоль Pro — …»
+      const rx = new RegExp('^[^\\p{L}\\p{N}]*' + _reEsc(_pubTitle(g)) + '\\s*[—–-]\\s', 'u'), w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      for (let t; (t = w.nextNode());) if (rx.test(t.textContent) && !t.parentNode.closest('.cc-desc,a')) { a = t; break; }
+    }
     if (!a) return;
     let n = a;
     while (n.nextSibling && !(n.nextSibling.nodeType === 1 && n.nextSibling.tagName === 'BR')) n = n.nextSibling;
@@ -1571,6 +1581,9 @@ function _outAttachRegen() {
 // Абзац игры i в редакторе. Enter внутри описания в Chrome делит span на несколько с тем же data-gi —
 // читаем все части, а при замене пишем в первую и убираем остальные (иначе хвост старого текста остаётся).
 let _ccPostGen = 0, _ccPostBotHtml = '';
+// Ключ игры поста, переживающий обновление каталога: loadSnapshot создаёт новые объекты, а замена каталога — новые id,
+// поэтому — название и платформа (_gameMatchKey, как у слотов сторис); у своих товаров — название
+function _ccGameKey(g) { return g.id != null ? 'g:' + _gameMatchKey(g) : 't:' + g.title; }
 function _ccDescText(root, i) {
   return [...root.querySelectorAll(`.cc-desc[data-gi="${i}"]`)].map(s => s.textContent.trim()).filter(Boolean).join('\n');
 }
@@ -1674,6 +1687,8 @@ async function aiShrinkPost(){
   const target = Math.floor(lim * .93) + raw.length - visBefore;
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Сжимаю...'; }
   try {
+    // Снимок — HTML целиком: правка только разметки (жирный, адрес ссылки) во время сжатия тоже изменение
+    const gen = _ccPostGen, sent = document.getElementById('out-text').innerHTML;
     const prompt = `Сократи пост для Telegram до НЕ БОЛЕЕ ${target} символов (сейчас ${raw.length}).\n\nЖёсткие правила:\n1. Ссылки вида [текст](@L1) сохрани ВСЕ до единой, метку в скобках (@L1, @L2…) не менять.\n2. Все товары и их цены остаются — сокращай только описания (можно до одной короткой фразы).\n3. Шапку и подвал поста сохрани.\n4. Эмодзи в начале строк товаров сохрани.\n5. Верни ТОЛЬКО готовый текст поста, без пояснений и без \`\`\`.\n\nПост:\n${raw}`;
     const resp = await fetch(API + '/api/claude', { method: 'POST', headers: _claudeHeaders(), body: JSON.stringify({ model: descModel, max_tokens: 3000, messages: [{ role: 'user', content: prompt }] }) });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -1707,6 +1722,8 @@ async function aiShrinkPost(){
       showToast(`⚠️ Модель потеряла ссылки (${got.size} из ${urls.length}) — пост не изменён, нажми ещё раз`);
       return;
     }
+    // Пока шёл запрос, пост пересобрали («Заново», 🔄 у игры) или поправили руками — сжатый старый текст их бы затёр
+    if (gen !== _ccPostGen || document.getElementById('out-text').innerHTML !== sent) { showToast('Пост изменился, пока шло сжатие — сжатая версия не вставлена, нажми ещё раз'); return; }
     _jPostEdited(); // правку человека фиксируем до того, как её затрёт сжатая версия
     _ccPostGen++;
     document.getElementById('out-text').innerHTML = html;
@@ -1988,7 +2005,15 @@ function _lowMatchOk(q, matched){
   // «and» запроса в IGDB часто «&» («GTA V and Great White Shark Card» → «… & Great White Shark Card Bundle»)
   const qw=_hdNorm(q).split(' ').filter(w=>(w.length>1||/^\d$/.test(w))&&w!=='and');
   if(_hdDlcAdded(q,matched)) return false;
-  return qw.length>0 && qw.every(w=>mw.includes(w));
+  if(!(qw.length>0 && qw.every(w=>mw.includes(w)))) return false;
+  // Подзаголовок через «:», которого нет в запросе, — другая игра или набор: «Ratchet and Clank» →
+  // «Ratchet & Clank: Rift Apart», «Persona 3 Reload» → «…: Persona 4 Golden Persona Set».
+  // Проходит, если каждое его слово есть в запросе или это слово издания («Ghost of Tsushima: Director's Cut»).
+  // Кончается на «Edition» — издание, как в _hdExtends («Mass Effect: Legendary Edition»)
+  const ms=String(matched), qAll=_hdNorm(q).split(' '), cut=ms.indexOf(':');
+  if(cut<0) return true;
+  const sub=_hdNorm(ms.slice(cut+1)).split(' ').filter(w=>(w.length>1||/^\d$/.test(w))&&w!=='and');
+  return sub[sub.length-1]==='edition'||sub.every(w=>qAll.includes(w)||_HD_EDITION_WORDS.includes(w));
 }
 // Найденное название продолжает наше без разделителя: «The Forest» → «The Forest of Doom» (medium) — это другая игра.
 // Подзаголовок через «:», «-», «(» и хвост из слов издания («… Deluxe Edition») — та же игра, не отсекаем.
@@ -2682,6 +2707,9 @@ function _gameMatchKey(g){ return _gameKey(g)+'|'+(g._platform||''); }
 // пересчитываются, иначе QR и текст в открытой сторис вели бы на старый id, а новый пост — на новый.
 function _stRelinkSlots(){
   if(!_stG||!_stG.length) return;
+  // Закрытая сторис: данные слотов (id, адрес, цена) всё равно обновляем — их берут подпись и батч, —
+  // но без тостов, событий и перерисовки про то, чего нет на экране
+  const open=!!document.getElementById('story-modal')?.classList.contains('open');
   const swap={}, reprice=[], dupes=[], elChg={};
   _stG.forEach(s=>{
     if(s.id==null||!s._mk) return;
@@ -2694,7 +2722,7 @@ function _stRelinkSlots(){
       const c=games.filter(same);
       g=c.length>1?c.find(x=>x.priceRUB===s.priceRUB):c[0];
       // Предупреждаем один раз на слот: иначе тост повторялся бы при каждой загрузке каталога
-      if(!g&&c.length>1){ if(!s._dupWarned){ s._dupWarned=true; dupes.push(s.title); } return; }
+      if(!g&&c.length>1){ if(open&&!s._dupWarned){ s._dupWarned=true; dupes.push(s.title); } return; }
     }
     if(!g) return; // игры больше нет в каталоге — остаётся прежний адрес: магазин найдёт по t/p или покажет поиск
     s._dupWarned=false;
@@ -2713,8 +2741,7 @@ function _stRelinkSlots(){
     jError('story_relink_dupes','несколько игр с тем же названием и платформой, ни одной с ценой слота',{titles:dupes});
     warn.push(`в каталоге несколько «${dupes[0]}» с другой ценой — слот не обновлён, проверь игру`);
   }
-  const open=document.getElementById('story-modal')?.classList.contains('open');
-  const flush=()=>{ if(warn.length) showToast('⚠️ '+warn.join('; ')); };
+  const flush=()=>{ if(open&&warn.length) showToast('⚠️ '+warn.join('; ')); };
   if(!Object.keys(swap).length&&!reprice.length&&!Object.keys(elChg).length){ flush(); if(open) _stRedrawCurrent(); return; }
   // Элементы редактора: QR, цена и скидка своего слота. Те же правки — в снимках Ctrl+Z / Ctrl+Y:
   // иначе откат возвращал бы старый QR и старую цену. Цену и скидку, которые человек переписал сам, не трогаем.
@@ -2745,7 +2772,7 @@ function _stRelinkSlots(){
       }
     });
   };
-  if(_stEls&&_stEls.length) fixEls(_stEls,true);
+  if(_stEls&&_stEls.length) fixEls(_stEls,true); // QR грузим и при закрытой сторис; её предупреждения flush не покажет
   [..._stUndoStack,..._stRedoStack].forEach(sn=>fixEls(sn.els,false));
   if(elMissed) warn.push('проверь цену и скидку на картинке — их правили вручную');
   if(elNewDisc) warn.push('у игры появилась скидка — добавь плашку «Скидка», если нужна');
@@ -2767,8 +2794,7 @@ function _stRelinkSlots(){
   const ta=document.getElementById('st-cap-text'); if(ta&&_stCapText) ta.value=_stCapText;
   if(missed) warn.push('цены в каталоге изменились — проверь цены в подписи к сторис');
   flush();
-  jEvent('used',{feature:'storyRelink',n:keys.length,reprice:reprice.length,missed});
-  if(open) _stRedrawCurrent(); // кадр с новыми ценами и QR
+  if(open){ jEvent('used',{feature:'storyRelink',n:keys.length,reprice:reprice.length,missed}); _stRedrawCurrent(); } // кадр с новыми ценами и QR
 }
 function _reEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 // Текст элементов цены и скидки — один формат при создании и при пересчёте (_stRelinkSlots сверяет по нему)

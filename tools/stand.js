@@ -128,6 +128,10 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
     ['The Witcher 3 Wild Hunt', 'medium', 'The Witcher 3 Wild Hunt Game of the Year Edition', true], ['Death Stranding', 'medium', "Death Stranding Director's Cut", true],
     ['Pokémon Legends: Arceus', 'low', 'Pokemon Legends: Arceus', true], ['Final Fantasy VII', 'medium', 'Final Fantasy VII Remake', false],
     ['Call of Duty Vanguard Cross-Gen Bundle', 'medium', 'Call of Duty Vanguard Cross-Gen Bundle Pack', false], ['Starter Pack', 'medium', 'Starter Pack Bundle', false], ['Mass Effect', 'medium', 'Mass Effect Legendary Edition', true],
+    // с.74: low с чужим подзаголовком через «:» — не наша игра; подзаголовок из слов запроса или издания — наша
+    ['Persona 3 Reload', 'low', 'Persona 3 Reload: Persona 4 Golden Persona Set', false], ['Ratchet and Clank', 'low', 'Ratchet & Clank: Rift Apart', false],
+    ['Ghost of Tsushima', 'low', "Ghost of Tsushima: Director's Cut", true], ['UFC 6', 'low', 'EA Sports UFC 6', true],
+    ['Mass Effect', 'low', 'Mass Effect: Legendary Edition', true], ['1942', 'low', 1942, true], // matched не строкой — без падения
   ].map(([q, c, m, want]) => ({ q, got: _hdAccept(q, { cover: 'x', confidence: c, matched: m }), want })));
   ok('_hdAccept: продолжение названия и скин отсекаются, первая глава и «1 - 4» находятся', ha.every(x => x.got === x.want), JSON.stringify(ha.filter(x => x.got !== x.want)));
   // ответ модели строкой — не описания по буквам
@@ -739,6 +743,99 @@ const srv = http.createServer((q, s) => { s.writeHead(200, { 'Content-Type': 'te
   });
   ok('🔄 игры: ответ после пересборки поста отброшен, без ложного «стёрт»', !late.late && /пересобран/.test(late.toast), JSON.stringify(late));
   claudeQ.length = 0;
+
+  // Ревью с.74 ─────────────────────────────────────────────
+  // jEvent — перехват событий журнала на время одного сценария
+  await p.evaluate(() => { window.__ev = null; const je = window.jEvent; window.jEvent = function (k, d) { if (window.__ev) window.__ev.push([k, d]); return je.apply(this, arguments); }; });
+  // «Сжать» в полёте, а человек поправил текст — сжатая старая версия правку не затирает
+  claudeQ.push(echo(t => t.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО')));
+  const shRace = await p.evaluate(async () => {
+    __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    const s = aiShrinkPost(); box.appendChild(document.createTextNode(' ПРАВКА-ВО-ВРЕМЯ')); await s;
+    return { kept: box.innerText.includes('ПРАВКА-ВО-ВРЕМЯ'), shrunk: box.innerText.includes('СЖАТО'), toast: __toast() };
+  });
+  ok('«✂️ Сжать»: правка, сделанная во время сжатия, не затирается', shRace.kept && !shRace.shrunk && /изменился/.test(shRace.toast), JSON.stringify(shRace));
+  claudeQ.length = 0;
+  // То же, но правка только разметки (жирный) — текст тот же, а правку затирать всё равно нельзя
+  claudeQ.push(echo(t => t.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО')));
+  const shBold = await p.evaluate(async () => {
+    __sel(3); await generateAIPost(); const box = document.getElementById('out-text');
+    const s = aiShrinkPost(), d = box.querySelector('.cc-desc'), b = document.createElement('b');
+    b.textContent = d.textContent; d.textContent = ''; d.appendChild(b); await s;
+    return { bold: !!box.querySelector('.cc-desc b'), shrunk: box.innerText.includes('СЖАТО'), toast: __toast(), btn: document.getElementById('out-shrink-btn').disabled };
+  });
+  ok('«✂️ Сжать»: правка только разметки во время сжатия не затирается, кнопка снова активна', shBold.bold && !shBold.shrunk && /изменился/.test(shBold.toast) && !shBold.btn, JSON.stringify(shBold));
+  claudeQ.length = 0;
+  // «Заново» без выбранных игр (выбор сбрасывает обновление каталога) — пост на экране, ложного rejected нет
+  const noSel = await p.evaluate(async () => {
+    const before = _outSerialize('plain'); games.forEach(g => g._sel = false); window.__ev = [];
+    await regenPost(); const ev = window.__ev.map(e => e[0]); window.__ev = null;
+    return { shown: document.getElementById('out-panel').style.display !== 'none', same: _outSerialize('plain') === before, ev, toast: __toast() };
+  });
+  ok('«🔄 Заново» без выбранных игр: пост не прячется, rejected не пишется', noSel.shown && noSel.same && !noSel.ev.includes('rejected') && /Выбери/.test(noSel.toast), JSON.stringify(noSel));
+  // «Заново» после обновления каталога (новые объекты игр): «не повторяй» уходит модели по каждой игре
+  let rgPrompt = '';
+  // пост из базы (у __sel все игры с описанием) — Claude зовётся один раз, на «Заново»
+  claudeQ.push(body => { rgPrompt = body.messages[0].content; return JSON.stringify({ 1: 'А2', 2: 'Б2', 3: 'В2' }); });
+  const rl = await p.evaluate(async () => {
+    const bak = games; __sel(3); await generateAIPost(); const cur = _ccPostGames.map((g, i) => _ccDescText(document.getElementById('out-text'), i).slice(0, 40));
+    // как замена каталога: те же игры, новые объекты и новые id
+    games = games.map(g => ({ ...g, id: g.id != null ? g.id + 7 : g.id }));
+    await regenPost(); games = bak; return { cur };
+  });
+  ok('«🔄 Заново» после замены каталога (новые id) помнит текущий текст («не повторяй»)', rl.cur.length === 3 && rl.cur.every(x => rgPrompt.includes('не повторяй): ' + x)), rgPrompt.slice(-300));
+  claudeQ.length = 0;
+  // Свой товар (id:null, без ссылки) после «Сжать» сохраняет 🔄
+  claudeQ.push(echo(t => t.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО')));
+  const cust = await p.evaluate(async () => {
+    const bak = games; __sel(2);
+    games = [...games, { id: null, _custom: true, _sel: true, title: 'Стенд-Консоль', priceRUB: 50000, description: 'Описание своей консоли для проверки стенда' }];
+    await generateAIPost(); const box = document.getElementById('out-text'), n0 = box.querySelectorAll('.cc-regen').length;
+    await aiShrinkPost(); const r = { n0, n1: box.querySelectorAll('.cc-regen').length, descs: box.querySelectorAll('.cc-desc').length, toast: __toast() };
+    games = bak; return r;
+  });
+  ok('«✂️ Сжать»: у своего товара без ссылки 🔄 остаётся', cust.n0 === 3 && cust.n1 === 3 && cust.descs === 3, JSON.stringify(cust));
+  claudeQ.length = 0;
+  // Свои товары «Стенд-Консоль Pro» и «Стенд-Консоль», название есть и в шапке — 🔄 каждого встаёт в его строку товара
+  claudeQ.push(echo(t => 'Новинка Стенд-Консоль и игры\n\n' + t.replace(/(руб\.)\n[^\n]*/g, '$1\nСЖАТО')));
+  const cust2 = await p.evaluate(async () => {
+    const bak = games; __sel(1);
+    games = [...games, { id: null, _custom: true, _sel: true, title: 'Стенд-Консоль Pro', priceRUB: 70000, description: 'Описание старшей консоли для проверки стенда' },
+      { id: null, _custom: true, _sel: true, title: 'Стенд-Консоль', priceRUB: 50000, description: 'Описание младшей консоли для проверки стенда' }];
+    await generateAIPost(); const box = document.getElementById('out-text');
+    await aiShrinkPost();
+    const line = i => { const b = box.querySelector(`.cc-regen[data-gi="${i}"]`); if (!b) return null; let s = '', n = b.previousSibling;
+      for (; n && !(n.nodeType === 1 && n.tagName === 'BR'); n = n.previousSibling) s = n.textContent + s; return s.trim(); };
+    const r = _ccPostGames.map((g, i) => g.id == null ? { t: g.title, line: line(i) } : null).filter(Boolean);
+    games = bak; return r;
+  });
+  ok('«✂️ Сжать»: 🔄 своего товара — в его строке, не в шапке и не у похожего названия',
+    cust2.length === 2 && cust2.every(x => x.line && new RegExp('^[^\\p{L}]*' + x.t + ' —', 'u').test(x.line)), JSON.stringify(cust2));
+  claudeQ.length = 0;
+  // 🔄 игры: ручная правка ЭТОГО абзаца попадает в журнал как edited до замены
+  claudeQ.push(JSON.stringify({ 1: 'ПОСЛЕ-РУЧНОЙ' }));
+  const ed = await p.evaluate(async () => {
+    __sel(1); await generateAIPost(); const box = document.getElementById('out-text');
+    _ccSetDesc(box, 0, 'РУЧНАЯ-ПРАВКА-АБЗАЦА'); window.__ev = [];
+    await regenGameDesc(box.querySelector('.cc-regen[data-gi="0"]'));
+    const e = window.__ev.find(x => x[0] === 'edited'); window.__ev = null;
+    return { edited: !!(e && String(e[1].edited).includes('РУЧНАЯ-ПРАВКА-АБЗАЦА')), now: box.innerText.includes('ПОСЛЕ-РУЧНОЙ') };
+  });
+  ok('🔄 игры: ручная правка абзаца уходит в журнал до замены', ed.edited && ed.now, JSON.stringify(ed));
+  claudeQ.length = 0;
+  // Обновление каталога при закрытой сторис — слоты перецепляются (upd: новый id), но без тостов и событий
+  const rc = await p.evaluate(() => {
+    if (!_stG || !_stG.length || document.getElementById('story-modal').classList.contains('open')) return null;
+    const bak = games; showToast('СТЕНД-ТОСТ'); window.__ev = [];
+    games = games.map(g => g.id != null && !g._custom ? { ...g, id: g.id + 11, priceRUB: g.priceRUB ? g.priceRUB + 1 : g.priceRUB } : g);
+    const can = _stG.some(s => s.id != null && s._mk && s.priceRUB);
+    _stRelinkSlots();
+    const r = { toast: __toast(), can, upd: _stG.some(s => s._mk && s.id != null && !bak.some(g => g.id === s.id)), ev: window.__ev.map(e => e[0]) };
+    window.__ev = null; games = bak; _stRelinkSlots(); return r; // вернуть слоты к настоящему каталогу
+  });
+  // Данные слотов (id, цена) обновляются и при закрытой сторис — их берут подпись и батч; тостов и событий нет
+  if (rc) ok('обновление каталога при закрытой сторис: слоты обновлены, без тостов и событий', rc.toast === 'СТЕНД-ТОСТ' && (!rc.can || rc.upd) && !rc.ev.length, JSON.stringify(rc));
+  else skip('обновление каталога при закрытой сторис', 'слотов прошлой сторис нет или сторис открыта');
   await p.evaluate(() => { try { jFlush(); } catch (e) {} }); await sleep(1500);
   ok('🔄 игры: журнал получил событие post_game', /post_game/.test((posted['/cc/journal'] || []).join('\n')));
   await p.keyboard.press('Escape');
